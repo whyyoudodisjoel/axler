@@ -14,18 +14,18 @@ These benchmarks measure operation + `.realize()` execution time on **CPU only**
 
 | Operation | 50x50 | 100x100 |
 |-----------|-------|---------|
-| Add | 489.46 ns | 1.22 µs |
-| Sub | 573.63 ns | 1.30 µs |
-| Mul | 558.04 ns | 1.33 µs |
-| Div | 610.22 ns | 1.42 µs |
-| Sum | 1.50 µs | 5.20 µs |
-| Max | 1.06 µs | 3.07 µs |
-| Min | 997.46 ns | 3.07 µs |
-| Mean | 1.51 µs | 5.25 µs |
-| Fusion | 1.80 µs | 2.78 µs |
+| Add | 287.25 ns | 963.19 ns |
+| Sub | 368.64 ns | 1.15 µs |
+| Mul | 381.18 ns | 1.10 µs |
+| Div | 409.97 ns | 1.32 µs |
+| Sum | 1.46 µs | 5.13 µs |
+| Max | 904.77 ns | 2.95 µs |
+| Min | 899.81 ns | 2.93 µs |
+| Mean | 1.41 µs | 5.14 µs |
+| Fusion | 738.07 ns | 1.70 µs |
 
 **Summary:**
-- Element-wise operations: 500ns-1.5µs
+- Element-wise operations: 287ns-1.5µs
 - Operation costs on CPU excluding tensor creation
 - See "CUDA Performance" section for GPU benchmarks
 
@@ -37,44 +37,43 @@ CPU benchmarks comparing axler-tensor with Candle (without CUDA):
 
 | Operation | Size | Axler | Candle | Axler vs Candle |
 |-----------|------|-------|--------|-----------------|
-| **Add** | 50 | 2.34 µs | 2.11 µs | ~11% slower |
-| | 100 | 8.58 µs | 8.01 µs | ~7% slower |
-| | 200 | 31.47 µs | 30.93 µs | ~2% slower |
-| | 500 | 207.33 µs | 212.85 µs | ~3% faster |
-| **Sub** | 50 | 4.34 µs | 4.08 µs | ~6% slower |
-| | 100 | 15.66 µs | 15.19 µs | ~3% slower |
-| | 200 | 58.99 µs | 59.49 µs | ~1% faster |
-| | 500 | 396.52 µs | 739.22 µs | **46% faster** |
-| **Mul** | 50 | 4.20 µs | 3.94 µs | ~7% slower |
-| | 100 | 15.42 µs | 15.12 µs | ~2% slower |
-| | 200 | 59.53 µs | 58.50 µs | ~2% slower |
-| | 500 | 395.10 µs | 744.14 µs | **47% faster** |
-| **Div** | 50 | 4.41 µs | 4.23 µs | ~4% slower |
-| | 100 | 15.46 µs | 15.78 µs | ~2% faster |
-| | 200 | 59.23 µs | 62.06 µs | ~5% faster |
-| | 500 | 400.39 µs | 759.07 µs | **47% faster** |
-| **Sum** | 50 | 3.27 µs | 3.31 µs | ~1% faster |
-| | 100 | 12.16 µs | 12.10 µs | Similar |
-| | 200 | 48.20 µs | 47.09 µs | ~2% slower |
-| | 500 | 292.37 µs | 295.89 µs | ~1% faster |
-| **Max** | 50 | 2.78 µs | 3.67 µs | **24% faster** |
-| | 100 | 9.91 µs | 14.24 µs | **30% faster** |
-| | 200 | 38.68 µs | 60.81 µs | **36% faster** |
-| | 500 | 239.18 µs | 403.53 µs | **41% faster** |
-| **Mean** | 50 | 3.38 µs | 3.44 µs | ~2% faster |
-| | 100 | 12.16 µs | 12.24 µs | ~1% faster |
-| | 200 | 47.32 µs | 49.20 µs | ~4% faster |
-| | 500 | 295.49 µs | 293.75 µs | ~1% slower |
-| **Fusion** | 50 | 9.17 µs | 8.49 µs | ~8% slower |
-| | 100 | 30.75 µs | 31.10 µs | ~1% faster |
-| | 200 | 116.06 µs | 125.17 µs | **7% faster** |
-| | 500 | 1.15 ms | 2.02 ms | **43% faster** |
+| **Add** | 50 | 2.11 µs | 2.14 µs | ~1% faster |
+| | 100 | 8.05 µs | 8.12 µs | ~1% faster |
+| | 200 | 32.77 µs | 31.17 µs | ~5% slower |
+| | 500 | 207.34 µs | 209.99 µs | ~1% faster |
+| **Sub** | 50 | 3.89 µs | 3.96 µs | ~2% faster |
+| | 100 | 15.14 µs | 15.25 µs | ~1% faster |
+| | 200 | 58.73 µs | 59.09 µs | ~1% faster |
+| | 500 | 420.82 µs | 756.06 µs | **44% faster** |
+| **Mul** | 50 | 3.90 µs | 3.98 µs | ~2% faster |
+| | 100 | 15.85 µs | 16.41 µs | ~3% faster |
+| | 200 | 58.35 µs | 59.41 µs | ~2% faster |
+| | 500 | 400.33 µs | 757.41 µs | **47% faster** |
+| **Div** | 50 | 3.98 µs | 4.34 µs | ~8% faster |
+| | 100 | 15.26 µs | 15.88 µs | ~4% faster |
+| | 200 | 59.12 µs | 65.98 µs | **10% faster** |
+| | 500 | 399.85 µs | 832.84 µs | **52% faster** |
+| **Sum** | 50 | 3.19 µs | 3.35 µs | ~5% faster |
+| | 100 | 12.07 µs | 12.14 µs | ~1% faster |
+| | 200 | 47.22 µs | 47.36 µs | Similar |
+| | 500 | 293.88 µs | 293.76 µs | Similar |
+| **Max** | 50 | 2.66 µs | 3.69 µs | **28% faster** |
+| | 100 | 10.06 µs | 14.40 µs | **30% faster** |
+| | 200 | 38.35 µs | 60.96 µs | **37% faster** |
+| | 500 | 239.92 µs | 415.97 µs | **42% faster** |
+| **Mean** | 50 | 3.20 µs | 3.53 µs | **9% faster** |
+| | 100 | 12.06 µs | 12.30 µs | ~2% faster |
+| | 200 | 47.50 µs | 47.66 µs | Similar |
+| | 500 | 293.81 µs | 297.54 µs | ~1% faster |
+| **Fusion** | 50 | 7.73 µs | 8.52 µs | **9% faster** |
+| | 100 | 29.58 µs | 31.38 µs | **6% faster** |
+| | 200 | 119.32 µs | 127.76 µs | **7% faster** |
+| | 500 | 1.20 ms | 2.09 ms | **43% faster** |
 
 **Summary:**
-- Reduction operations (max, mean): 24-41% faster
-- Element-wise operations at 500x500: 46-47% faster
-- Matrix multiplication: Candle is faster (optimized BLAS)
-- Operation fusion: 43% faster at 500x500
+- Reduction operations (max, mean): 28-42% faster
+- Element-wise operations at 500x500: 44-52% faster
+- Operation fusion: 6-43% faster across all sizes
 
 ### CUDA Performance: Axler vs Candle
 
@@ -84,24 +83,23 @@ CUDA benchmarks comparing GPU implementations (with `--features cuda`):
 
 | Operation | Size | Axler CUDA | Candle CUDA | Axler vs Candle |
 |-----------|------|------------|-------------|-----------------|
-| **Add** | 128 | 276.14 µs | 7.03 ms | **96% faster** |
-| | 256 | 489.58 µs | 7.09 ms | **93% faster** |
-| | 512 | 1.85 ms | 7.23 ms | **74% faster** |
-| **Mul** | 128 | 162.07 µs | 6.82 ms | **98% faster** |
-| | 256 | 552.20 µs | 6.95 ms | **92% faster** |
-| | 512 | 2.04 ms | 7.42 ms | **72% faster** |
-| **Sum** | 128 | 240.85 µs | 2.13 ms | **88% faster** |
-| | 256 | 997.72 µs | 2.46 ms | **59% faster** |
-| | 512 | 4.22 ms | 2.53 ms | 40% slower |
-| **Fusion** | 128 | 309.87 µs | 8.63 ms | **96% faster** |
-| | 256 | 1.09 ms | 8.85 ms | **88% faster** |
-| | 512 | 4.04 ms | 10.34 ms | **61% faster** |
+| **Add** | 128 | 138.82 µs | 6.95 ms | **98% faster** |
+| | 256 | 309.08 µs | 8.51 ms | **96% faster** |
+| | 512 | 1.07 ms | 9.06 ms | **88% faster** |
+| **Mul** | 128 | 182.29 µs | 9.12 ms | **98% faster** |
+| | 256 | 586.53 µs | 8.99 ms | **93% faster** |
+| | 512 | 2.21 ms | 9.87 ms | **78% faster** |
+| **Sum** | 128 | 265.89 µs | 2.25 ms | **88% faster** |
+| | 256 | 1.28 ms | 2.34 ms | **45% faster** |
+| | 512 | 4.75 ms | 2.66 ms | 44% slower |
+| **Fusion** | 128 | 341.91 µs | 8.86 ms | **96% faster** |
+| | 256 | 1.14 ms | 9.59 ms | **88% faster** |
+| | 512 | 4.30 ms | 11.23 ms | **62% faster** |
 
 **Summary:**
-- Element-wise operations: 72-98% faster
-- Matrix multiplication: 20-85% faster
-- Operation fusion: 61-96% faster
-- Results at 512x512 tensor size
+- Element-wise operations: 78-98% faster
+- Operation fusion: 62-96% faster
+- Reduction operations (sum): 45-88% faster (slower at 512x512 due to GPU overhead)
 
 ## How Axler Works
 
