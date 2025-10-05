@@ -22,7 +22,6 @@ These benchmarks measure operation + `.realize()` execution time on **CPU only**
 | Max | 1.06 µs | 3.07 µs |
 | Min | 997.46 ns | 3.07 µs |
 | Mean | 1.51 µs | 5.25 µs |
-| MatMul | 54.86 µs | 602.50 µs |
 | Fusion | 1.80 µs | 2.78 µs |
 
 **Summary:**
@@ -66,9 +65,6 @@ CPU benchmarks comparing axler-tensor with Candle (without CUDA):
 | | 100 | 12.16 µs | 12.24 µs | ~1% faster |
 | | 200 | 47.32 µs | 49.20 µs | ~4% faster |
 | | 500 | 295.49 µs | 293.75 µs | ~1% slower |
-| **MatMul** | 50 | 58.52 µs | 7.94 µs | **86% slower** |
-| | 100 | 633.22 µs | 65.23 µs | **90% slower** |
-| | 200 | 6.33 ms | 190.03 µs | **97% slower** |
 | **Fusion** | 50 | 9.17 µs | 8.49 µs | ~8% slower |
 | | 100 | 30.75 µs | 31.10 µs | ~1% faster |
 | | 200 | 116.06 µs | 125.17 µs | **7% faster** |
@@ -97,9 +93,6 @@ CUDA benchmarks comparing GPU implementations (with `--features cuda`):
 | **Sum** | 128 | 240.85 µs | 2.13 ms | **88% faster** |
 | | 256 | 997.72 µs | 2.46 ms | **59% faster** |
 | | 512 | 4.22 ms | 2.53 ms | 40% slower |
-| **MatMul** | 128 | 158.06 µs | 1.09 ms | **85% faster** |
-| | 256 | 586.32 µs | 1.45 ms | **60% faster** |
-| | 512 | 2.34 ms | 2.93 ms | **20% faster** |
 | **Fusion** | 128 | 309.87 µs | 8.63 ms | **96% faster** |
 | | 256 | 1.09 ms | 8.85 ms | **88% faster** |
 | | 512 | 4.04 ms | 10.34 ms | **61% faster** |
