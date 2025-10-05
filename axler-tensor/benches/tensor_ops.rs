@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use axler_tensor::Tensor;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 fn benchmark_add(c: &mut Criterion) {
     let mut group = c.benchmark_group("add");

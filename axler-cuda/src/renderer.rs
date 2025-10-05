@@ -1,7 +1,7 @@
-use rustc_hash::FxHashMap;
 use axler_common::indexing::rangeify;
 use axler_traits::Renderer;
 use axler_uop::{ALUOps, Buffer, DType, LogicalOps, LoweredUOp, MovementOps, ReduceOps, UOp};
+use rustc_hash::FxHashMap;
 
 pub struct CudaRenderer {
     buffer_map: FxHashMap<usize, usize>,
@@ -34,12 +34,7 @@ impl CudaRenderer {
         idx
     }
 
-    fn generate_expression<'a>(
-        &mut self,
-        uop: &'a UOp<'a>,
-        indices: &[String],
-        shape: &[usize],
-    ) -> String {
+    fn generate_expression(&mut self, uop: &UOp, indices: &[String], shape: &[usize]) -> String {
         match uop {
             UOp::Buffer(buf) => {
                 let idx = self.allocate_buffer_idx(*buf);
@@ -66,54 +61,54 @@ impl CudaRenderer {
             UOp::ALUOps(alu_op) => {
                 match alu_op {
                     ALUOps::Add(left, right) => {
-                        let left_expr = self.generate_expression(left, indices, shape);
-                        let right_expr = self.generate_expression(right, indices, shape);
+                        let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                        let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                         format!("({} + {})", left_expr, right_expr)
                     }
                     ALUOps::Sub(left, right) => {
-                        let left_expr = self.generate_expression(left, indices, shape);
-                        let right_expr = self.generate_expression(right, indices, shape);
+                        let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                        let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                         format!("({} - {})", left_expr, right_expr)
                     }
                     ALUOps::Mul(left, right) => {
-                        let left_expr = self.generate_expression(left, indices, shape);
-                        let right_expr = self.generate_expression(right, indices, shape);
+                        let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                        let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                         format!("({} * {})", left_expr, right_expr)
                     }
                     ALUOps::Div(left, right) => {
-                        let left_expr = self.generate_expression(left, indices, shape);
-                        let right_expr = self.generate_expression(right, indices, shape);
+                        let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                        let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                         format!("({} / {})", left_expr, right_expr)
                     }
                     ALUOps::Mod(left, right) => {
-                        let left_expr = self.generate_expression(left, indices, shape);
-                        let right_expr = self.generate_expression(right, indices, shape);
+                        let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                        let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                         format!("(fmodf({}, {}))", left_expr, right_expr) // Use fmodf for float modulo
                     }
                     ALUOps::Neg(src, _) => {
-                        let src_expr = self.generate_expression(src, indices, shape);
+                        let src_expr = self.generate_expression(src.as_ref(), indices, shape);
                         format!("(-{})", src_expr)
                     }
                 }
             }
             UOp::LogicalOps(log_op) => match log_op {
                 LogicalOps::And(left, right) => {
-                    let left_expr = self.generate_expression(left, indices, shape);
-                    let right_expr = self.generate_expression(right, indices, shape);
+                    let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                    let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                     format!("({} & {})", left_expr, right_expr)
                 }
                 LogicalOps::Or(left, right) => {
-                    let left_expr = self.generate_expression(left, indices, shape);
-                    let right_expr = self.generate_expression(right, indices, shape);
+                    let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                    let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                     format!("({} | {})", left_expr, right_expr)
                 }
                 LogicalOps::Xor(left, right) => {
-                    let left_expr = self.generate_expression(left, indices, shape);
-                    let right_expr = self.generate_expression(right, indices, shape);
+                    let left_expr = self.generate_expression(left.as_ref(), indices, shape);
+                    let right_expr = self.generate_expression(right.as_ref(), indices, shape);
                     format!("({} ^ {})", left_expr, right_expr)
                 }
                 LogicalOps::Not(src, _) => {
-                    let src_expr = self.generate_expression(src, indices, shape);
+                    let src_expr = self.generate_expression(src.as_ref(), indices, shape);
                     format!("(!{})", src_expr)
                 }
             },
@@ -122,13 +117,13 @@ impl CudaRenderer {
                     // Reshape changes the logical view but not the physical layout
                     // Pass the new_shape down for multi-dimensional indexing
                     // For flat indexing (single index), it doesn't matter
-                    self.generate_expression(inner, indices, new_shape)
+                    self.generate_expression(inner.as_ref(), indices, new_shape)
                 }
                 MovementOps::Permute(inner, _) | MovementOps::Pad { parent: inner, .. } => {
-                    self.generate_expression(inner, indices, shape)
+                    self.generate_expression(inner.as_ref(), indices, shape)
                 }
             },
-            UOp::Load(parent, _) => self.generate_expression(parent, indices, shape),
+            UOp::Load(parent, _) => self.generate_expression(parent.as_ref(), indices, shape),
 
             UOp::Kernel(_, buf, _, _) => {
                 let idx = self.allocate_buffer_idx(*buf);
@@ -150,17 +145,17 @@ impl CudaRenderer {
         }
     }
 
-    fn render_reduce_op<'a>(
+    fn render_reduce_op(
         &mut self,
-        reduce_op: &ReduceOps<&'a UOp<'a>>,
+        reduce_op: &ReduceOps<Box<UOp>>,
         code: &mut String,
         output_idx: usize,
     ) {
         let (parent, axes) = match reduce_op {
-            ReduceOps::Sum { parent, axes } => (parent, axes),
-            ReduceOps::Max { parent, axes } => (parent, axes),
-            ReduceOps::Min { parent, axes } => (parent, axes),
-            ReduceOps::Mean { parent, axes } => (parent, axes),
+            ReduceOps::Sum { parent, axes } => (parent.as_ref(), axes),
+            ReduceOps::Max { parent, axes } => (parent.as_ref(), axes),
+            ReduceOps::Min { parent, axes } => (parent.as_ref(), axes),
+            ReduceOps::Mean { parent, axes } => (parent.as_ref(), axes),
         };
 
         let (parent_shape, _) = parent.calculate_output_info();
@@ -230,7 +225,7 @@ impl CudaRenderer {
 }
 
 impl Renderer<LoweredUOp> for CudaRenderer {
-    fn lower_if_required<'a>(&mut self, uop: &'a UOp<'a>, _buffers: &[Buffer]) -> LoweredUOp {
+    fn lower_if_required(&mut self, uop: &UOp, _buffers: &[Buffer]) -> LoweredUOp {
         let (output_shape, output_dtype) = uop.calculate_output_info();
         let output_size: usize = output_shape.iter().product();
 
@@ -241,7 +236,7 @@ impl Renderer<LoweredUOp> for CudaRenderer {
         }
     }
 
-    fn render<'a>(&mut self, lowered_uop: &LoweredUOp, uop: &'a UOp<'a>) -> String {
+    fn render(&mut self, lowered_uop: &LoweredUOp, uop: &UOp) -> String {
         let mut code = String::new();
         code.push_str("// CUDA Kernel Generated Code\n");
         code.push_str("#define FLT_MAX 3.402823466e+38F\n");
