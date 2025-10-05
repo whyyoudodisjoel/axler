@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "axler-uop",
+    "axler-tensor",
+    "axler-traits",
+    "axler-cpu"
+, "axler-common", "axler-cuda"]
+resolver = "3"

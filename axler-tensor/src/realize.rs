@@ -1,0 +1,297 @@
+use std::ffi::c_void;
+use axler_cpu::get_cpu_device;
+use axler_traits::Device;
+use axler_uop::{DeviceType, UOp};
+
+use crate::Tensor;
+
+#[cfg(feature = "cuda")]
+use axler_cuda::get_cuda_device;
+
+impl<'a> Tensor<'a> {
+    fn get_buffer_ptr(buf: &axler_uop::Buffer) -> *const c_void {
+        unsafe {
+            match buf.dtype {
+                axler_uop::DType::F32 => (*buf.ptr.f32).as_ptr() as *const c_void,
+                axler_uop::DType::U32 => (*buf.ptr.u32).as_ptr() as *const c_void,
+                axler_uop::DType::U8 => (*buf.ptr.u8).as_ptr() as *const c_void,
+            }
+        }
+    }
+
+    fn get_buffer_size(buf: &axler_uop::Buffer) -> usize {
+        unsafe {
+            match buf.dtype {
+                axler_uop::DType::F32 => (&*buf.ptr.f32).len(),
+                axler_uop::DType::U32 => (&*buf.ptr.u32).len(),
+                axler_uop::DType::U8 => (&*buf.ptr.u8).len(),
+            }
+        }
+    }
+    pub fn get_target_device(&self) -> DeviceType {
+        match &self.uop {
+            UOp::Load(_, device) => *device,
+            UOp::Kernel(_, _, _, device) => *device,
+            UOp::Buffer(buf) => buf.device,
+            _ => self
+                .find_device_recursive(&self.uop)
+                .unwrap_or(DeviceType::CPU),
+        }
+    }
+
+    fn find_device_recursive(&self, uop: &'a UOp<'a>) -> Option<DeviceType> {
+        match uop {
+            UOp::Load(_, device) => Some(*device),
+            UOp::Kernel(_, _, _, device) => Some(*device),
+            UOp::Buffer(buf) => Some(buf.device),
+            UOp::ALUOps(op) => {
+                let (left, right) = match op {
+                    axler_uop::ALUOps::Add(l, r)
+                    | axler_uop::ALUOps::Sub(l, r)
+                    | axler_uop::ALUOps::Mul(l, r)
+                    | axler_uop::ALUOps::Div(l, r)
+                    | axler_uop::ALUOps::Mod(l, r)
+                    | axler_uop::ALUOps::Neg(l, r) => (l, Some(r)),
+                };
+                self.find_device_recursive(left)
+                    .or_else(|| right.and_then(|r| self.find_device_recursive(r)))
+            }
+            UOp::ReduceOps(op) => match op {
+                axler_uop::ReduceOps::Sum { parent, .. }
+                | axler_uop::ReduceOps::Max { parent, .. }
+                | axler_uop::ReduceOps::Min { parent, .. }
+                | axler_uop::ReduceOps::Mean { parent, .. } => self.find_device_recursive(parent),
+            },
+            UOp::MovementOps(op) => match op {
+                axler_uop::MovementOps::Reshape(inner, _)
+                | axler_uop::MovementOps::Permute(inner, _)
+                | axler_uop::MovementOps::Pad { parent: inner, .. } => {
+                    self.find_device_recursive(inner)
+                }
+            },
+            UOp::LogicalOps(op) => {
+                let (left, right) = match op {
+                    axler_uop::LogicalOps::And(l, r)
+                    | axler_uop::LogicalOps::Or(l, r)
+                    | axler_uop::LogicalOps::Xor(l, r) => (l, Some(r)),
+                    axler_uop::LogicalOps::Not(l, r) => (l, Some(r)),
+                };
+                self.find_device_recursive(left)
+                    .or_else(|| right.and_then(|r| self.find_device_recursive(r)))
+            }
+            UOp::Const(_) => None,
+        }
+    }
+
+    pub fn realize(&'a self) -> Tensor<'a> {
+        // Check if already realized
+        if matches!(
+            self.uop,
+            UOp::Kernel(_, _, _, _) | UOp::Buffer(_) | UOp::Const(_)
+        ) {
+            return Tensor {
+                uop: self.uop.clone(),
+            };
+        }
+
+        let target_device = self.get_target_device();
+
+        let (_kernel_ptr, output_buffer, output_shape, output_dtype, output_size) =
+            match target_device {
+                DeviceType::CPU => {
+                    let mut device = get_cpu_device().lock();
+                    self.execute_on_device(&mut *device, target_device)
+                }
+                #[cfg(feature = "cuda")]
+                DeviceType::CUDA => {
+                    if let Some(cuda_device_mutex) = get_cuda_device() {
+                        let mut cuda_device_opt = cuda_device_mutex.lock().unwrap();
+                        if let Some(ref mut device) = *cuda_device_opt {
+                            self.execute_on_device(device, target_device)
+                        } else {
+                            panic!("CUDA device not available");
+                        }
+                    } else {
+                        panic!("CUDA device not initialized");
+                    }
+                }
+                #[cfg(not(feature = "cuda"))]
+                DeviceType::CUDA => {
+                    panic!("CUDA support not compiled. Enable 'cuda' feature.");
+                }
+            };
+
+        let buffer = axler_uop::Buffer {
+            dtype: output_dtype,
+            ptr: unsafe {
+                match output_dtype {
+                    axler_uop::DType::F32 => axler_uop::BufferPtr {
+                        f32: std::slice::from_raw_parts(output_buffer as *const f32, output_size),
+                    },
+                    axler_uop::DType::U32 => axler_uop::BufferPtr {
+                        u32: std::slice::from_raw_parts(output_buffer as *const u32, output_size),
+                    },
+                    axler_uop::DType::U8 => axler_uop::BufferPtr {
+                        u8: std::slice::from_raw_parts(output_buffer as *const u8, output_size),
+                    },
+                }
+            },
+            device: target_device,
+            size: output_size,
+        };
+
+        Tensor {
+            uop: UOp::Kernel(&self.uop, buffer, output_shape, target_device),
+        }
+    }
+
+    fn execute_on_device(
+        &'a self,
+        device: &mut dyn Device,
+        target_device: DeviceType,
+    ) -> (
+        *mut c_void,
+        *mut c_void,
+        Vec<usize>,
+        axler_uop::DType,
+        usize,
+    ) {
+        let buffers = self.uop.extract_buffers();
+
+        for buf in &buffers {
+            if buf.device != target_device && buf.device != DeviceType::CPU {
+                panic!(
+                    "Cannot execute kernel with buffers on different devices. Found buffer on {:?}, expected {:?}",
+                    buf.device, target_device
+                );
+            }
+        }
+
+        // Use optimized path that caches based on UOp hash
+        let (kernel_ptr, output_shape, output_dtype, output_size) = match target_device {
+            DeviceType::CPU => {
+                // Cast to CpuDevice to use optimized method
+                let cpu_device =
+                    unsafe { &mut *(device as *mut dyn Device as *mut axler_cpu::CpuDevice) };
+                cpu_device.get_or_compile_kernel(&self.uop, &buffers)
+            }
+            #[cfg(feature = "cuda")]
+            DeviceType::CUDA => {
+                // Cast to CudaDevice to use optimized method
+                let cuda_device =
+                    unsafe { &mut *(device as *mut dyn Device as *mut axler_cuda::CudaDevice) };
+                cuda_device.get_or_compile_kernel(&self.uop, &buffers)
+            }
+            #[cfg(not(feature = "cuda"))]
+            DeviceType::CUDA => {
+                panic!("CUDA support not compiled. Enable 'cuda' feature.");
+            }
+        };
+
+        let output_buffer = device.allocate(output_size, output_dtype);
+
+        let mut buffer_ptrs: Vec<*mut c_void> = if target_device == DeviceType::CUDA {
+            buffers
+                .iter()
+                .map(|buf| {
+                    // Check if buffer is already on CUDA device
+                    if buf.device == DeviceType::CUDA {
+                        Self::get_buffer_ptr(buf) as *mut c_void
+                    } else {
+                        let size = Self::get_buffer_size(buf);
+                        let device_buf = device.allocate(size, buf.dtype);
+                        let host_ptr = Self::get_buffer_ptr(buf);
+                        device.copy_host_device(host_ptr, device_buf, size, buf.dtype);
+                        device_buf
+                    }
+                })
+                .collect()
+        } else {
+            buffers
+                .iter()
+                .map(|buf| Self::get_buffer_ptr(buf) as *mut c_void)
+                .collect()
+        };
+
+        buffer_ptrs.push(output_buffer);
+
+        device.execute(kernel_ptr, buffer_ptrs.clone());
+
+        // Free temporary device buffers that were allocated for host->device copies
+        if target_device == DeviceType::CUDA {
+            for (i, buf) in buffers.iter().enumerate() {
+                if buf.device != DeviceType::CUDA {
+                    // This was a temporary buffer we allocated
+                    let size = Self::get_buffer_size(buf);
+                    device.deallocate(buffer_ptrs[i], size, buf.dtype);
+                }
+            }
+        }
+
+        (
+            output_buffer,
+            output_buffer,
+            output_shape,
+            output_dtype,
+            output_size,
+        )
+    }
+
+    pub fn to_vec<T: axler_uop::ToDType + Clone + Default>(&'a self) -> Vec<T> {
+        let realized = self.realize();
+
+        let buffer = match realized.uop {
+            UOp::Kernel(_, buf, _, _) => buf,
+            _ => panic!("Failed to realize tensor"),
+        };
+
+        if buffer.dtype != T::dtype() {
+            panic!(
+                "Type mismatch: tensor has dtype {:?} but requested type has dtype {:?}",
+                buffer.dtype,
+                T::dtype()
+            );
+        }
+
+        let size = Self::get_buffer_size(&buffer);
+
+        match buffer.device {
+            axler_uop::DeviceType::CPU => unsafe {
+                let slice = match buffer.dtype {
+                    axler_uop::DType::F32 => {
+                        std::slice::from_raw_parts((*buffer.ptr.f32).as_ptr() as *const T, size)
+                    }
+                    axler_uop::DType::U32 => {
+                        std::slice::from_raw_parts((*buffer.ptr.u32).as_ptr() as *const T, size)
+                    }
+                    axler_uop::DType::U8 => {
+                        std::slice::from_raw_parts((*buffer.ptr.u8).as_ptr() as *const T, size)
+                    }
+                };
+                slice.to_vec()
+            },
+            DeviceType::CUDA => {
+                #[cfg(feature = "cuda")]
+                {
+                    if let Some(cuda_device_mutex) = axler_cuda::get_cuda_device() {
+                        let cuda_device_opt = cuda_device_mutex.lock().unwrap();
+                        if let Some(ref cuda_device) = *cuda_device_opt {
+                            // Allocate host buffer
+                            let mut host_vec = vec![T::default(); size];
+                            let host_ptr = host_vec.as_mut_ptr() as *mut c_void;
+
+                            let device_ptr = Self::get_buffer_ptr(&buffer);
+
+                            // Use CUDA device's copy_device_host to transfer from CUDA to CPU
+                            cuda_device.copy_device_host(device_ptr, host_ptr, size, buffer.dtype);
+                            return host_vec;
+                        }
+                    }
+                    panic!("CUDA device not available for transfer");
+                }
+                #[cfg(not(feature = "cuda"))]
+                panic!("CUDA support not compiled. Enable 'cuda' feature.");
+            }
+        }
+    }
+}
