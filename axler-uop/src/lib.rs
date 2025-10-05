@@ -98,27 +98,27 @@ pub struct Const {
 }
 
 #[derive(Debug, Clone)]
-pub enum UOp<'a> {
+pub enum UOp {
     Const(Const),
     Buffer(Buffer),
 
     // ALU Ops
-    ALUOps(ALUOps<&'a Self>),
+    ALUOps(ALUOps<Box<Self>>),
 
     // Logical Ops
-    LogicalOps(LogicalOps<&'a Self>),
+    LogicalOps(LogicalOps<Box<Self>>),
 
     // Movement Ops
-    MovementOps(MovementOps<&'a Self>),
+    MovementOps(MovementOps<Box<Self>>),
 
-    ReduceOps(ReduceOps<&'a Self>),
+    ReduceOps(ReduceOps<Box<Self>>),
 
     // Load operation - transfers data from one device to another
     // Contains the source UOp and target device
-    Load(&'a Self, DeviceType),
+    Load(Box<Self>, DeviceType),
 
     // Kernel Boundary - stores the AST (for gradients), realized buffer, output shape, and device
-    Kernel(&'a Self, Buffer, Vec<usize>, DeviceType),
+    Kernel(Box<Self>, Buffer, Vec<usize>, DeviceType),
 }
 
 #[derive(Debug, Clone)]
@@ -210,7 +210,7 @@ impl ToDType for u8 {
 use rustc_hash::FxHashSet;
 use std::fmt::Debug;
 
-impl<'a> UOp<'a> {
+impl UOp {
     pub fn shape(&self) -> Vec<usize> {
         match self {
             UOp::Buffer(buf) => {
@@ -229,19 +229,19 @@ impl<'a> UOp<'a> {
                 | ALUOps::Sub(left, _)
                 | ALUOps::Mul(left, _)
                 | ALUOps::Div(left, _)
-                | ALUOps::Mod(left, _) => left.shape(),
-                ALUOps::Neg(src, _) => src.shape(),
+                | ALUOps::Mod(left, _) => left.as_ref().shape(),
+                ALUOps::Neg(src, _) => src.as_ref().shape(),
             },
             UOp::LogicalOps(op) => match op {
                 LogicalOps::And(left, _) | LogicalOps::Or(left, _) | LogicalOps::Xor(left, _) => {
-                    left.shape()
+                    left.as_ref().shape()
                 }
-                LogicalOps::Not(src, _) => src.shape(),
+                LogicalOps::Not(src, _) => src.as_ref().shape(),
             },
             UOp::MovementOps(op) => match op {
                 MovementOps::Reshape(_, new_shape) => new_shape.clone(),
                 MovementOps::Permute(inner, perm) => {
-                    let shape = inner.shape();
+                    let shape = inner.as_ref().shape();
                     // Permute rearranges dimensions according to perm
                     let mut new_shape = vec![0; shape.len()];
                     for (i, &p) in perm.iter().enumerate() {
@@ -252,7 +252,7 @@ impl<'a> UOp<'a> {
                     new_shape
                 }
                 MovementOps::Pad { parent, pad, .. } => {
-                    let shape = parent.shape();
+                    let shape = parent.as_ref().shape();
                     // Padding increases shape by pad amount on each dimension
                     let mut padded_shape = shape.clone();
                     for (i, &p) in pad.iter().enumerate().take(padded_shape.len()) {
@@ -261,14 +261,14 @@ impl<'a> UOp<'a> {
                     padded_shape
                 }
             },
-            UOp::Load(parent, _) => parent.shape(),
+            UOp::Load(parent, _) => parent.as_ref().shape(),
             UOp::Kernel(_, _, shape, _) => shape.clone(),
             UOp::ReduceOps(op) => match op {
                 ReduceOps::Sum { parent, axes }
                 | ReduceOps::Max { parent, axes }
                 | ReduceOps::Min { parent, axes }
                 | ReduceOps::Mean { parent, axes } => {
-                    let mut shape = parent.shape();
+                    let mut shape = parent.as_ref().shape();
 
                     if let Some(axis) = axes {
                         if *axis < shape.len() {
@@ -296,26 +296,28 @@ impl<'a> UOp<'a> {
                 | ALUOps::Sub(left, _)
                 | ALUOps::Mul(left, _)
                 | ALUOps::Div(left, _)
-                | ALUOps::Mod(left, _) => left.dtype(),
-                ALUOps::Neg(src, _) => src.dtype(),
+                | ALUOps::Mod(left, _) => left.as_ref().dtype(),
+                ALUOps::Neg(src, _) => src.as_ref().dtype(),
             },
             UOp::LogicalOps(op) => match op {
                 LogicalOps::And(left, _) | LogicalOps::Or(left, _) | LogicalOps::Xor(left, _) => {
-                    left.dtype()
+                    left.as_ref().dtype()
                 }
-                LogicalOps::Not(src, _) => src.dtype(),
+                LogicalOps::Not(src, _) => src.as_ref().dtype(),
             },
             UOp::MovementOps(op) => match op {
-                MovementOps::Reshape(inner, _) | MovementOps::Permute(inner, _) => inner.dtype(),
-                MovementOps::Pad { parent, .. } => parent.dtype(),
+                MovementOps::Reshape(inner, _) | MovementOps::Permute(inner, _) => {
+                    inner.as_ref().dtype()
+                }
+                MovementOps::Pad { parent, .. } => parent.as_ref().dtype(),
             },
-            UOp::Load(parent, _) => parent.dtype(),
+            UOp::Load(parent, _) => parent.as_ref().dtype(),
             UOp::Kernel(_, buf, _, _) => buf.dtype,
             UOp::ReduceOps(op) => match op {
                 ReduceOps::Sum { parent, .. }
                 | ReduceOps::Max { parent, .. }
                 | ReduceOps::Min { parent, .. }
-                | ReduceOps::Mean { parent, .. } => parent.dtype(),
+                | ReduceOps::Mean { parent, .. } => parent.as_ref().dtype(),
             },
         }
     }
@@ -324,7 +326,7 @@ impl<'a> UOp<'a> {
         (self.shape(), self.dtype())
     }
 
-    pub fn toposort(&'a self) -> Vec<&'a UOp<'a>> {
+    pub fn toposort<'a>(&'a self) -> Vec<&'a UOp> {
         let mut visited = FxHashSet::default();
         let mut stack = Vec::new();
 
@@ -345,9 +347,9 @@ impl<'a> UOp<'a> {
     fn extract_buffers_recursive(
         &self,
         buffers: &mut Vec<Buffer>,
-        visited: &mut FxHashSet<*const UOp<'a>>,
+        visited: &mut FxHashSet<*const UOp>,
     ) {
-        let self_ptr = self as *const UOp<'a>;
+        let self_ptr = self as *const UOp;
 
         if visited.contains(&self_ptr) {
             return;
@@ -369,8 +371,8 @@ impl<'a> UOp<'a> {
                 | ALUOps::Div(a, b)
                 | ALUOps::Neg(a, b)
                 | ALUOps::Mod(a, b) => {
-                    a.extract_buffers_recursive(buffers, visited);
-                    b.extract_buffers_recursive(buffers, visited);
+                    a.as_ref().extract_buffers_recursive(buffers, visited);
+                    b.as_ref().extract_buffers_recursive(buffers, visited);
                 }
             },
             UOp::LogicalOps(op) => match op {
@@ -378,17 +380,17 @@ impl<'a> UOp<'a> {
                 | LogicalOps::Or(a, b)
                 | LogicalOps::Not(a, b)
                 | LogicalOps::Xor(a, b) => {
-                    a.extract_buffers_recursive(buffers, visited);
-                    b.extract_buffers_recursive(buffers, visited);
+                    a.as_ref().extract_buffers_recursive(buffers, visited);
+                    b.as_ref().extract_buffers_recursive(buffers, visited);
                 }
             },
             UOp::MovementOps(op) => match op {
                 MovementOps::Reshape(a, _) | MovementOps::Permute(a, _) => {
-                    a.extract_buffers_recursive(buffers, visited)
+                    a.as_ref().extract_buffers_recursive(buffers, visited)
                 }
                 MovementOps::Pad { parent, fill, .. } => {
-                    parent.extract_buffers_recursive(buffers, visited);
-                    fill.extract_buffers_recursive(buffers, visited);
+                    parent.as_ref().extract_buffers_recursive(buffers, visited);
+                    fill.as_ref().extract_buffers_recursive(buffers, visited);
                 }
             },
             UOp::ReduceOps(op) => match op {
@@ -396,12 +398,12 @@ impl<'a> UOp<'a> {
                 | ReduceOps::Mean { parent, .. }
                 | ReduceOps::Min { parent, .. }
                 | ReduceOps::Sum { parent, .. } => {
-                    parent.extract_buffers_recursive(buffers, visited);
+                    parent.as_ref().extract_buffers_recursive(buffers, visited);
                 }
             },
             UOp::Load(parent, _) => {
                 // Load transfers data between devices
-                parent.extract_buffers_recursive(buffers, visited);
+                parent.as_ref().extract_buffers_recursive(buffers, visited);
             }
             UOp::Kernel(_, buf, _, _) => {
                 buffers.push(*buf);
@@ -410,12 +412,8 @@ impl<'a> UOp<'a> {
         }
     }
 
-    fn dfs_postorder(
-        &'a self,
-        visited: &mut FxHashSet<*const UOp<'a>>,
-        stack: &mut Vec<&'a UOp<'a>>,
-    ) {
-        let self_ptr = self as *const UOp<'a>;
+    fn dfs_postorder<'a>(&'a self, visited: &mut FxHashSet<*const UOp>, stack: &mut Vec<&'a UOp>) {
+        let self_ptr = self as *const UOp;
 
         if visited.contains(&self_ptr) {
             return;
@@ -434,8 +432,8 @@ impl<'a> UOp<'a> {
                 | ALUOps::Div(a, b)
                 | ALUOps::Neg(a, b)
                 | ALUOps::Mod(a, b) => {
-                    a.dfs_postorder(visited, stack);
-                    b.dfs_postorder(visited, stack);
+                    a.as_ref().dfs_postorder(visited, stack);
+                    b.as_ref().dfs_postorder(visited, stack);
                 }
             },
             UOp::LogicalOps(op) => match op {
@@ -443,17 +441,17 @@ impl<'a> UOp<'a> {
                 | LogicalOps::Or(a, b)
                 | LogicalOps::Not(a, b)
                 | LogicalOps::Xor(a, b) => {
-                    a.dfs_postorder(visited, stack);
-                    b.dfs_postorder(visited, stack);
+                    a.as_ref().dfs_postorder(visited, stack);
+                    b.as_ref().dfs_postorder(visited, stack);
                 }
             },
             UOp::MovementOps(op) => match op {
                 MovementOps::Reshape(a, _) | MovementOps::Permute(a, _) => {
-                    a.dfs_postorder(visited, stack)
+                    a.as_ref().dfs_postorder(visited, stack)
                 }
                 MovementOps::Pad { parent, fill, .. } => {
-                    parent.dfs_postorder(visited, stack);
-                    fill.dfs_postorder(visited, stack);
+                    parent.as_ref().dfs_postorder(visited, stack);
+                    fill.as_ref().dfs_postorder(visited, stack);
                 }
             },
             UOp::ReduceOps(op) => match op {
@@ -461,11 +459,11 @@ impl<'a> UOp<'a> {
                 | ReduceOps::Mean { parent, .. }
                 | ReduceOps::Min { parent, .. }
                 | ReduceOps::Sum { parent, .. } => {
-                    parent.dfs_postorder(visited, stack);
+                    parent.as_ref().dfs_postorder(visited, stack);
                 }
             },
             UOp::Load(parent, _) => {
-                parent.dfs_postorder(visited, stack);
+                parent.as_ref().dfs_postorder(visited, stack);
             }
             UOp::Kernel(_, _, _, _) => {
                 // Kernel boundary - don't traverse the AST, it's already realized

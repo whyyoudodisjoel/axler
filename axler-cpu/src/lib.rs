@@ -1,3 +1,5 @@
+use axler_traits::{Device, KernelHandle, KernelInfo, Renderer};
+use axler_uop::{Buffer, UOp};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -5,8 +7,6 @@ use std::ffi::c_void;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use axler_traits::{Device, KernelHandle, KernelInfo, Renderer};
-use axler_uop::{Buffer, UOp};
 
 use crate::renderer::CpuRenderer;
 

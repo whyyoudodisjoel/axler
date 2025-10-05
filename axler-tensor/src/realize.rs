@@ -1,14 +1,14 @@
-use std::ffi::c_void;
 use axler_cpu::get_cpu_device;
 use axler_traits::Device;
 use axler_uop::{DeviceType, UOp};
+use std::ffi::c_void;
 
 use crate::Tensor;
 
 #[cfg(feature = "cuda")]
 use axler_cuda::get_cuda_device;
 
-impl<'a> Tensor<'a> {
+impl Tensor {
     fn get_buffer_ptr(buf: &axler_uop::Buffer) -> *const c_void {
         unsafe {
             match buf.dtype {
@@ -39,7 +39,7 @@ impl<'a> Tensor<'a> {
         }
     }
 
-    fn find_device_recursive(&self, uop: &'a UOp<'a>) -> Option<DeviceType> {
+    fn find_device_recursive(&self, uop: &UOp) -> Option<DeviceType> {
         match uop {
             UOp::Load(_, device) => Some(*device),
             UOp::Kernel(_, _, _, device) => Some(*device),
@@ -51,7 +51,7 @@ impl<'a> Tensor<'a> {
                     | axler_uop::ALUOps::Mul(l, r)
                     | axler_uop::ALUOps::Div(l, r)
                     | axler_uop::ALUOps::Mod(l, r)
-                    | axler_uop::ALUOps::Neg(l, r) => (l, Some(r)),
+                    | axler_uop::ALUOps::Neg(l, r) => (l.as_ref(), Some(r.as_ref())),
                 };
                 self.find_device_recursive(left)
                     .or_else(|| right.and_then(|r| self.find_device_recursive(r)))
@@ -60,21 +60,23 @@ impl<'a> Tensor<'a> {
                 axler_uop::ReduceOps::Sum { parent, .. }
                 | axler_uop::ReduceOps::Max { parent, .. }
                 | axler_uop::ReduceOps::Min { parent, .. }
-                | axler_uop::ReduceOps::Mean { parent, .. } => self.find_device_recursive(parent),
+                | axler_uop::ReduceOps::Mean { parent, .. } => {
+                    self.find_device_recursive(parent.as_ref())
+                }
             },
             UOp::MovementOps(op) => match op {
                 axler_uop::MovementOps::Reshape(inner, _)
                 | axler_uop::MovementOps::Permute(inner, _)
                 | axler_uop::MovementOps::Pad { parent: inner, .. } => {
-                    self.find_device_recursive(inner)
+                    self.find_device_recursive(inner.as_ref())
                 }
             },
             UOp::LogicalOps(op) => {
                 let (left, right) = match op {
                     axler_uop::LogicalOps::And(l, r)
                     | axler_uop::LogicalOps::Or(l, r)
-                    | axler_uop::LogicalOps::Xor(l, r) => (l, Some(r)),
-                    axler_uop::LogicalOps::Not(l, r) => (l, Some(r)),
+                    | axler_uop::LogicalOps::Xor(l, r) => (l.as_ref(), Some(r.as_ref())),
+                    axler_uop::LogicalOps::Not(l, r) => (l.as_ref(), Some(r.as_ref())),
                 };
                 self.find_device_recursive(left)
                     .or_else(|| right.and_then(|r| self.find_device_recursive(r)))
@@ -83,7 +85,7 @@ impl<'a> Tensor<'a> {
         }
     }
 
-    pub fn realize(&'a self) -> Tensor<'a> {
+    pub fn realize(&self) -> Tensor {
         // Check if already realized
         if matches!(
             self.uop,
@@ -141,12 +143,17 @@ impl<'a> Tensor<'a> {
         };
 
         Tensor {
-            uop: UOp::Kernel(&self.uop, buffer, output_shape, target_device),
+            uop: UOp::Kernel(
+                Box::new(self.uop.clone()),
+                buffer,
+                output_shape,
+                target_device,
+            ),
         }
     }
 
     fn execute_on_device(
-        &'a self,
+        &self,
         device: &mut dyn Device,
         target_device: DeviceType,
     ) -> (
@@ -237,7 +244,7 @@ impl<'a> Tensor<'a> {
         )
     }
 
-    pub fn to_vec<T: axler_uop::ToDType + Clone + Default>(&'a self) -> Vec<T> {
+    pub fn to_vec<T: axler_uop::ToDType + Clone + Default>(&self) -> Vec<T> {
         let realized = self.realize();
 
         let buffer = match realized.uop {

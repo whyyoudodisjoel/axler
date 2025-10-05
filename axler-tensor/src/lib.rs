@@ -6,18 +6,17 @@ use axler_uop::{Buffer, DeviceType, ToDType, UOp};
 pub mod realize;
 pub mod tests;
 
-#[derive(Clone)]
-pub struct Tensor<'a> {
-    pub uop: UOp<'a>,
+pub struct Tensor {
+    pub uop: UOp,
 }
 
 // SAFETY: Tensor operations are immutable - they only read from buffers
 // and never modify them. The realize() operation creates new buffers
 // rather than modifying existing ones.
-unsafe impl<'a> Send for Tensor<'a> {}
-unsafe impl<'a> Sync for Tensor<'a> {}
+unsafe impl Send for Tensor {}
+unsafe impl Sync for Tensor {}
 
-impl<'a> Drop for Tensor<'a> {
+impl Drop for Tensor {
     fn drop(&mut self) {
         // Free any realized buffers when the tensor is dropped
         if let UOp::Kernel(_, buf, _, device) = &self.uop {
@@ -52,8 +51,8 @@ impl<'a> Drop for Tensor<'a> {
     }
 }
 
-impl<'a> Tensor<'a> {
-    pub fn from_slice<T>(value: &'a [T]) -> Self
+impl Tensor {
+    pub fn from_slice<T>(value: &[T]) -> Self
     where
         T: ToDType,
     {
@@ -80,111 +79,129 @@ impl<'a> Tensor<'a> {
         self.uop.dtype()
     }
 
-    pub fn reshape(&'a self, sh: &[usize]) -> Self {
+    pub fn reshape(&self, sh: &[usize]) -> Self {
         Self {
-            uop: UOp::MovementOps(axler_uop::MovementOps::Reshape(&self.uop, sh.to_vec())),
+            uop: UOp::MovementOps(axler_uop::MovementOps::Reshape(
+                Box::new(self.uop.clone()),
+                sh.to_vec(),
+            )),
         }
     }
 
-    pub fn sum(&'a self, axes: Option<usize>) -> Self {
+    pub fn sum(&self, axes: Option<usize>) -> Self {
         Self {
             uop: UOp::ReduceOps(axler_uop::ReduceOps::Sum {
-                parent: &self.uop,
+                parent: Box::new(self.uop.clone()),
                 axes,
             }),
         }
     }
 
-    pub fn max(&'a self, axes: Option<usize>) -> Self {
+    pub fn max(&self, axes: Option<usize>) -> Self {
         Self {
             uop: UOp::ReduceOps(axler_uop::ReduceOps::Max {
-                parent: &self.uop,
+                parent: Box::new(self.uop.clone()),
                 axes,
             }),
         }
     }
 
-    pub fn min(&'a self, axes: Option<usize>) -> Self {
+    pub fn min(&self, axes: Option<usize>) -> Self {
         Self {
             uop: UOp::ReduceOps(axler_uop::ReduceOps::Min {
-                parent: &self.uop,
+                parent: Box::new(self.uop.clone()),
                 axes,
             }),
         }
     }
 
-    pub fn mean(&'a self, axes: Option<usize>) -> Self {
+    pub fn mean(&self, axes: Option<usize>) -> Self {
         Self {
             uop: UOp::ReduceOps(axler_uop::ReduceOps::Mean {
-                parent: &self.uop,
+                parent: Box::new(self.uop.clone()),
                 axes,
             }),
         }
     }
 
-    pub fn add(&'a self, rhs: &'a Self) -> Self {
+    pub fn add(&self, rhs: &Self) -> Self {
         Tensor {
-            uop: UOp::ALUOps(axler_uop::ALUOps::Add(&self.uop, &rhs.uop)),
+            uop: UOp::ALUOps(axler_uop::ALUOps::Add(
+                Box::new(self.uop.clone()),
+                Box::new(rhs.uop.clone()),
+            )),
         }
     }
 
-    pub fn sub(&'a self, rhs: &'a Self) -> Self {
+    pub fn sub(&self, rhs: &Self) -> Self {
         Tensor {
-            uop: UOp::ALUOps(axler_uop::ALUOps::Sub(&self.uop, &rhs.uop)),
+            uop: UOp::ALUOps(axler_uop::ALUOps::Sub(
+                Box::new(self.uop.clone()),
+                Box::new(rhs.uop.clone()),
+            )),
         }
     }
 
-    pub fn mul(&'a self, rhs: &'a Self) -> Self {
+    pub fn mul(&self, rhs: &Self) -> Self {
         Tensor {
-            uop: UOp::ALUOps(axler_uop::ALUOps::Mul(&self.uop, &rhs.uop)),
+            uop: UOp::ALUOps(axler_uop::ALUOps::Mul(
+                Box::new(self.uop.clone()),
+                Box::new(rhs.uop.clone()),
+            )),
         }
     }
 
-    pub fn div(&'a self, rhs: &'a Self) -> Self {
+    pub fn div(&self, rhs: &Self) -> Self {
         Tensor {
-            uop: UOp::ALUOps(axler_uop::ALUOps::Div(&self.uop, &rhs.uop)),
+            uop: UOp::ALUOps(axler_uop::ALUOps::Div(
+                Box::new(self.uop.clone()),
+                Box::new(rhs.uop.clone()),
+            )),
         }
     }
 
-    pub fn neg(&'a self, rhs: &'a Self) -> Self {
+    pub fn neg(&self, rhs: &Self) -> Self {
         Tensor {
-            uop: UOp::ALUOps(axler_uop::ALUOps::Neg(&self.uop, &rhs.uop)),
+            uop: UOp::ALUOps(axler_uop::ALUOps::Neg(
+                Box::new(self.uop.clone()),
+                Box::new(rhs.uop.clone()),
+            )),
         }
     }
 
     /// Transfer tensor to a specific device
     /// This creates a Load operation that will transfer data when realized
-    pub fn to_device(&'a self, device: DeviceType) -> Self {
+    pub fn to_device(&self, device: DeviceType) -> Self {
         Tensor {
-            uop: UOp::Load(&self.uop, device),
+            uop: UOp::Load(Box::new(self.uop.clone()), device),
         }
     }
 }
 
-impl<'a> Add for &'a Tensor<'a> {
-    type Output = Tensor<'a>;
+impl Add for &Tensor {
+    type Output = Tensor;
     fn add(self, rhs: Self) -> Self::Output {
         self.add(rhs)
     }
 }
 
-impl<'a> Sub for &'a Tensor<'a> {
-    type Output = Tensor<'a>;
+impl Sub for &Tensor {
+    type Output = Tensor;
 
     fn sub(self, rhs: Self) -> Self::Output {
         self.sub(rhs)
     }
 }
 
-impl<'a> Mul for &'a Tensor<'a> {
-    type Output = Tensor<'a>;
+impl Mul for &Tensor {
+    type Output = Tensor;
     fn mul(self, rhs: Self) -> Self::Output {
         self.mul(rhs)
     }
 }
 
-impl<'a> Div for &'a Tensor<'a> {
-    type Output = Tensor<'a>;
+impl Div for &Tensor {
+    type Output = Tensor;
 
     fn div(self, rhs: Self) -> Self::Output {
         self.div(rhs)

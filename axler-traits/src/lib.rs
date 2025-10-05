@@ -1,10 +1,10 @@
-use std::ffi::c_void;
 use axler_uop::{Buffer, UOp};
+use std::ffi::c_void;
 
 pub trait Renderer<LoweredUOp> {
-    fn render<'a>(&mut self, lowered_uop: &LoweredUOp, uop: &'a UOp<'a>) -> String;
+    fn render(&mut self, lowered_uop: &LoweredUOp, uop: &UOp) -> String;
 
-    fn lower_if_required<'a>(&mut self, uop: &'a UOp<'a>, buffers: &[Buffer]) -> LoweredUOp;
+    fn lower_if_required(&mut self, uop: &UOp, buffers: &[Buffer]) -> LoweredUOp;
 }
 
 // Kernel handle - opaque type that each device can interpret differently

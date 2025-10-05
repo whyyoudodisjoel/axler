@@ -1,12 +1,12 @@
 pub mod ffi;
 pub mod renderer;
 
+use axler_traits::{Device, KernelHandle, KernelInfo};
 use once_cell::sync::Lazy;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
-use axler_traits::{Device, KernelHandle, KernelInfo};
 
 use crate::ffi::nvrtc::compile_cuda_to_ptx;
 use crate::ffi::{CudaContext, CudaFunction, CudaModule};

@@ -1,6 +1,6 @@
+use axler_tensor::Tensor as TinyTensor;
 use candle_core::{Device, Tensor as CandleTensor};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use axler_tensor::Tensor as TinyTensor;
 
 #[cfg(feature = "cuda")]
 use axler_uop::DeviceType;
