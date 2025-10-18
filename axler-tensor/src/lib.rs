@@ -3,8 +3,12 @@ use std::ops::{Add, Div, Mul, Sub};
 use axler_traits::Device;
 use axler_uop::{Buffer, DeviceType, ToDType, UOp};
 
+pub mod async_realize;
 pub mod realize;
 pub mod tests;
+
+// Re-export async types
+pub use async_realize::TensorHandle;
 
 pub struct Tensor {
     pub uop: UOp,
@@ -33,16 +37,13 @@ impl Drop for Tensor {
                     }
                 }
                 DeviceType::CUDA => {
-                    #[cfg(feature = "cuda")]
-                    {
-                        if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
-                            unsafe {
-                                device.deallocate(
-                                    buf.ptr.f32 as *mut std::ffi::c_void,
-                                    buf.size,
-                                    buf.dtype,
-                                );
-                            }
+                    if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
+                        unsafe {
+                            device.deallocate(
+                                buf.ptr.f32 as *mut std::ffi::c_void,
+                                buf.size,
+                                buf.dtype,
+                            );
                         }
                     }
                 }

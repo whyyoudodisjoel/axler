@@ -2,89 +2,14 @@ use axler_cpu::get_cpu_device;
 use axler_traits::Device;
 use axler_uop::{DeviceType, UOp};
 use std::ffi::c_void;
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::Tensor;
 
-#[cfg(feature = "cuda")]
 use axler_cuda::get_cuda_device;
 
 impl Tensor {
-    fn get_buffer_ptr(buf: &axler_uop::Buffer) -> *const c_void {
-        unsafe {
-            match buf.dtype {
-                axler_uop::DType::F32 => (*buf.ptr.f32).as_ptr() as *const c_void,
-                axler_uop::DType::U32 => (*buf.ptr.u32).as_ptr() as *const c_void,
-                axler_uop::DType::U8 => (*buf.ptr.u8).as_ptr() as *const c_void,
-            }
-        }
-    }
-
-    fn get_buffer_size(buf: &axler_uop::Buffer) -> usize {
-        unsafe {
-            match buf.dtype {
-                axler_uop::DType::F32 => (&*buf.ptr.f32).len(),
-                axler_uop::DType::U32 => (&*buf.ptr.u32).len(),
-                axler_uop::DType::U8 => (&*buf.ptr.u8).len(),
-            }
-        }
-    }
-    pub fn get_target_device(&self) -> DeviceType {
-        match &self.uop {
-            UOp::Load(_, device) => *device,
-            UOp::Kernel(_, _, _, device) => *device,
-            UOp::Buffer(buf) => buf.device,
-            _ => self
-                .find_device_recursive(&self.uop)
-                .unwrap_or(DeviceType::CPU),
-        }
-    }
-
-    fn find_device_recursive(&self, uop: &UOp) -> Option<DeviceType> {
-        match uop {
-            UOp::Load(_, device) => Some(*device),
-            UOp::Kernel(_, _, _, device) => Some(*device),
-            UOp::Buffer(buf) => Some(buf.device),
-            UOp::ALUOps(op) => {
-                let (left, right) = match op {
-                    axler_uop::ALUOps::Add(l, r)
-                    | axler_uop::ALUOps::Sub(l, r)
-                    | axler_uop::ALUOps::Mul(l, r)
-                    | axler_uop::ALUOps::Div(l, r)
-                    | axler_uop::ALUOps::Mod(l, r)
-                    | axler_uop::ALUOps::Neg(l, r) => (l.as_ref(), Some(r.as_ref())),
-                };
-                self.find_device_recursive(left)
-                    .or_else(|| right.and_then(|r| self.find_device_recursive(r)))
-            }
-            UOp::ReduceOps(op) => match op {
-                axler_uop::ReduceOps::Sum { parent, .. }
-                | axler_uop::ReduceOps::Max { parent, .. }
-                | axler_uop::ReduceOps::Min { parent, .. }
-                | axler_uop::ReduceOps::Mean { parent, .. } => {
-                    self.find_device_recursive(parent.as_ref())
-                }
-            },
-            UOp::MovementOps(op) => match op {
-                axler_uop::MovementOps::Reshape(inner, _)
-                | axler_uop::MovementOps::Permute(inner, _)
-                | axler_uop::MovementOps::Pad { parent: inner, .. } => {
-                    self.find_device_recursive(inner.as_ref())
-                }
-            },
-            UOp::LogicalOps(op) => {
-                let (left, right) = match op {
-                    axler_uop::LogicalOps::And(l, r)
-                    | axler_uop::LogicalOps::Or(l, r)
-                    | axler_uop::LogicalOps::Xor(l, r) => (l.as_ref(), Some(r.as_ref())),
-                    axler_uop::LogicalOps::Not(l, r) => (l.as_ref(), Some(r.as_ref())),
-                };
-                self.find_device_recursive(left)
-                    .or_else(|| right.and_then(|r| self.find_device_recursive(r)))
-            }
-            UOp::Const(_) => None,
-        }
-    }
-
     pub fn realize(&self) -> Tensor {
         // Check if already realized
         if matches!(
@@ -96,7 +21,7 @@ impl Tensor {
             };
         }
 
-        let target_device = self.get_target_device();
+        let target_device = self.uop.get_target_device();
 
         let (_kernel_ptr, output_buffer, output_shape, output_dtype, output_size) =
             match target_device {
@@ -104,7 +29,6 @@ impl Tensor {
                     let mut device = get_cpu_device().lock();
                     self.execute_on_device(&mut *device, target_device)
                 }
-                #[cfg(feature = "cuda")]
                 DeviceType::CUDA => {
                     if let Some(cuda_device_mutex) = get_cuda_device() {
                         let mut cuda_device_opt = cuda_device_mutex.lock().unwrap();
@@ -116,10 +40,6 @@ impl Tensor {
                     } else {
                         panic!("CUDA device not initialized");
                     }
-                }
-                #[cfg(not(feature = "cuda"))]
-                DeviceType::CUDA => {
-                    panic!("CUDA support not compiled. Enable 'cuda' feature.");
                 }
             };
 
@@ -152,7 +72,7 @@ impl Tensor {
         }
     }
 
-    fn execute_on_device(
+    pub fn execute_on_device(
         &self,
         device: &mut dyn Device,
         target_device: DeviceType,
@@ -182,16 +102,11 @@ impl Tensor {
                     unsafe { &mut *(device as *mut dyn Device as *mut axler_cpu::CpuDevice) };
                 cpu_device.get_or_compile_kernel(&self.uop, &buffers)
             }
-            #[cfg(feature = "cuda")]
             DeviceType::CUDA => {
                 // Cast to CudaDevice to use optimized method
                 let cuda_device =
                     unsafe { &mut *(device as *mut dyn Device as *mut axler_cuda::CudaDevice) };
                 cuda_device.get_or_compile_kernel(&self.uop, &buffers)
-            }
-            #[cfg(not(feature = "cuda"))]
-            DeviceType::CUDA => {
-                panic!("CUDA support not compiled. Enable 'cuda' feature.");
             }
         };
 
@@ -203,11 +118,11 @@ impl Tensor {
                 .map(|buf| {
                     // Check if buffer is already on CUDA device
                     if buf.device == DeviceType::CUDA {
-                        Self::get_buffer_ptr(buf) as *mut c_void
+                        buf.get_buffer_ptr() as *mut c_void
                     } else {
-                        let size = Self::get_buffer_size(buf);
+                        let size = buf.get_buffer_size();
                         let device_buf = device.allocate(size, buf.dtype);
-                        let host_ptr = Self::get_buffer_ptr(buf);
+                        let host_ptr = buf.get_buffer_ptr();
                         device.copy_host_device(host_ptr, device_buf, size, buf.dtype);
                         device_buf
                     }
@@ -216,7 +131,7 @@ impl Tensor {
         } else {
             buffers
                 .iter()
-                .map(|buf| Self::get_buffer_ptr(buf) as *mut c_void)
+                .map(|buf| buf.get_buffer_ptr() as *mut c_void)
                 .collect()
         };
 
@@ -229,7 +144,7 @@ impl Tensor {
             for (i, buf) in buffers.iter().enumerate() {
                 if buf.device != DeviceType::CUDA {
                     // This was a temporary buffer we allocated
-                    let size = Self::get_buffer_size(buf);
+                    let size = buf.get_buffer_size();
                     device.deallocate(buffer_ptrs[i], size, buf.dtype);
                 }
             }
@@ -260,7 +175,7 @@ impl Tensor {
             );
         }
 
-        let size = Self::get_buffer_size(&buffer);
+        let size = buffer.get_buffer_size();
 
         match buffer.device {
             axler_uop::DeviceType::CPU => unsafe {
@@ -278,7 +193,6 @@ impl Tensor {
                 slice.to_vec()
             },
             DeviceType::CUDA => {
-                #[cfg(feature = "cuda")]
                 {
                     if let Some(cuda_device_mutex) = axler_cuda::get_cuda_device() {
                         let cuda_device_opt = cuda_device_mutex.lock().unwrap();
@@ -287,7 +201,7 @@ impl Tensor {
                             let mut host_vec = vec![T::default(); size];
                             let host_ptr = host_vec.as_mut_ptr() as *mut c_void;
 
-                            let device_ptr = Self::get_buffer_ptr(&buffer);
+                            let device_ptr = buffer.get_buffer_ptr();
 
                             // Use CUDA device's copy_device_host to transfer from CUDA to CPU
                             cuda_device.copy_device_host(device_ptr, host_ptr, size, buffer.dtype);
@@ -296,8 +210,6 @@ impl Tensor {
                     }
                     panic!("CUDA device not available for transfer");
                 }
-                #[cfg(not(feature = "cuda"))]
-                panic!("CUDA support not compiled. Enable 'cuda' feature.");
             }
         }
     }

@@ -1,6 +1,6 @@
 mod error;
 pub mod nvrtc;
-mod raw;
+pub mod raw;
 
 pub use error::*;
 pub use nvrtc::*;
@@ -132,6 +132,36 @@ impl CudaFunction {
         }
     }
 
+    pub fn launch_async(
+        &self,
+        grid_dim: (u32, u32, u32),
+        block_dim: (u32, u32, u32),
+        shared_mem_bytes: u32,
+        params: &mut [*mut c_void],
+        stream: &CudaStream,
+    ) -> Result<(), String> {
+        unsafe {
+            let mut param_ptrs: Vec<*mut c_void> = params
+                .iter_mut()
+                .map(|p| p as *mut *mut c_void as *mut c_void)
+                .collect();
+
+            check_cuda_error(cuLaunchKernel(
+                self.func,
+                grid_dim.0,
+                grid_dim.1,
+                grid_dim.2,
+                block_dim.0,
+                block_dim.1,
+                block_dim.2,
+                shared_mem_bytes,
+                stream.raw(),
+                param_ptrs.as_mut_ptr(),
+                ptr::null_mut(), // extra
+            ))
+        }
+    }
+
     pub fn set_attribute(&self, attrib: u32, value: i32) -> Result<(), String> {
         unsafe { check_cuda_error(cuFuncSetAttribute(self.func, attrib, value)) }
     }
@@ -172,4 +202,140 @@ pub fn get_memory_info() -> Result<(usize, usize), String> {
         check_cuda_error(cuMemGetInfo_v2(&mut free, &mut total))?;
     }
     Ok((free, total))
+}
+
+pub struct CudaStream {
+    stream: CUstream,
+}
+
+unsafe impl Send for CudaStream {}
+unsafe impl Sync for CudaStream {}
+
+impl CudaStream {
+    pub fn new() -> Result<Self, String> {
+        let mut stream: CUstream = ptr::null_mut();
+        unsafe {
+            check_cuda_error(cuStreamCreate(&mut stream, CU_STREAM_NON_BLOCKING))?;
+        }
+        Ok(Self { stream })
+    }
+
+    pub fn new_default() -> Result<Self, String> {
+        let mut stream: CUstream = ptr::null_mut();
+        unsafe {
+            check_cuda_error(cuStreamCreate(&mut stream, CU_STREAM_DEFAULT))?;
+        }
+        Ok(Self { stream })
+    }
+
+    pub fn synchronize(&self) -> Result<(), String> {
+        unsafe { check_cuda_error(cuStreamSynchronize(self.stream)) }
+    }
+
+    pub fn query(&self) -> Result<bool, String> {
+        unsafe {
+            match cuStreamQuery(self.stream) {
+                CUDA_SUCCESS => Ok(true),
+                CUDA_ERROR_NOT_READY => Ok(false),
+                err => {
+                    check_cuda_error(err)?;
+                    Ok(false)
+                }
+            }
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.query().unwrap_or(false)
+    }
+
+    pub fn raw(&self) -> CUstream {
+        self.stream
+    }
+
+    pub fn wait_event(&self, event: &CudaEvent) -> Result<(), String> {
+        unsafe { check_cuda_error(cuStreamWaitEvent(self.stream, event.raw(), 0)) }
+    }
+}
+
+impl Drop for CudaStream {
+    fn drop(&mut self) {
+        if !self.stream.is_null() {
+            unsafe {
+                let _ = cuStreamDestroy_v2(self.stream);
+            }
+        }
+    }
+}
+
+pub struct CudaEvent {
+    event: CUevent,
+}
+
+unsafe impl Send for CudaEvent {}
+unsafe impl Sync for CudaEvent {}
+
+impl CudaEvent {
+    pub fn new() -> Result<Self, String> {
+        let mut event: CUevent = ptr::null_mut();
+        unsafe {
+            check_cuda_error(cuEventCreate(&mut event, CU_EVENT_DEFAULT))?;
+        }
+        Ok(Self { event })
+    }
+
+    pub fn new_with_flags(flags: u32) -> Result<Self, String> {
+        let mut event: CUevent = ptr::null_mut();
+        unsafe {
+            check_cuda_error(cuEventCreate(&mut event, flags))?;
+        }
+        Ok(Self { event })
+    }
+
+    pub fn record(&self, stream: &CudaStream) -> Result<(), String> {
+        unsafe { check_cuda_error(cuEventRecord(self.event, stream.raw())) }
+    }
+
+    pub fn synchronize(&self) -> Result<(), String> {
+        unsafe { check_cuda_error(cuEventSynchronize(self.event)) }
+    }
+
+    pub fn query(&self) -> Result<bool, String> {
+        unsafe {
+            match cuEventQuery(self.event) {
+                CUDA_SUCCESS => Ok(true),
+                CUDA_ERROR_NOT_READY => Ok(false),
+                err => {
+                    check_cuda_error(err)?;
+                    Ok(false)
+                }
+            }
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.query().unwrap_or(false)
+    }
+
+    pub fn elapsed_time(&self, start: &CudaEvent) -> Result<f32, String> {
+        let mut ms: f32 = 0.0;
+        unsafe {
+            check_cuda_error(cuEventElapsedTime(&mut ms, start.event, self.event))?;
+        }
+        Ok(ms)
+    }
+
+    pub fn raw(&self) -> CUevent {
+        self.event
+    }
+}
+
+impl Drop for CudaEvent {
+    fn drop(&mut self) {
+        if !self.event.is_null() {
+            unsafe {
+                let _ = cuEventDestroy_v2(self.event);
+            }
+        }
+    }
 }

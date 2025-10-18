@@ -1,4 +1,7 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    ffi::c_void,
+    hash::{Hash, Hasher},
+};
 
 #[derive(Debug, Clone)]
 pub struct LoweredUOp {
@@ -89,6 +92,26 @@ impl Buffer {
             }
         }
     }
+
+    pub fn get_buffer_ptr(&self) -> *const c_void {
+        unsafe {
+            match self.dtype {
+                DType::F32 => (*self.ptr.f32).as_ptr() as *const c_void,
+                DType::U32 => (*self.ptr.u32).as_ptr() as *const c_void,
+                DType::U8 => (*self.ptr.u8).as_ptr() as *const c_void,
+            }
+        }
+    }
+
+    pub fn get_buffer_size(&self) -> usize {
+        unsafe {
+            match self.dtype {
+                DType::F32 => (&*self.ptr.f32).len(),
+                DType::U32 => (&*self.ptr.u32).len(),
+                DType::U8 => (&*self.ptr.u8).len(),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,6 +142,59 @@ pub enum UOp {
 
     // Kernel Boundary - stores the AST (for gradients), realized buffer, output shape, and device
     Kernel(Box<Self>, Buffer, Vec<usize>, DeviceType),
+}
+
+impl UOp {
+    pub fn get_target_device(&self) -> DeviceType {
+        match &self {
+            UOp::Load(_, device) => *device,
+            UOp::Kernel(_, _, _, device) => *device,
+            UOp::Buffer(buf) => buf.device,
+            _ => self.find_device_recursive().unwrap_or(DeviceType::CPU),
+        }
+    }
+
+    fn find_device_recursive(&self) -> Option<DeviceType> {
+        match self {
+            UOp::Load(_, device) => Some(*device),
+            UOp::Kernel(_, _, _, device) => Some(*device),
+            UOp::Buffer(buf) => Some(buf.device),
+            UOp::ALUOps(op) => {
+                let (left, right) = match op {
+                    ALUOps::Add(l, r)
+                    | ALUOps::Sub(l, r)
+                    | ALUOps::Mul(l, r)
+                    | ALUOps::Div(l, r)
+                    | ALUOps::Mod(l, r)
+                    | ALUOps::Neg(l, r) => (l.as_ref(), Some(r.as_ref())),
+                };
+                left.find_device_recursive()
+                    .or_else(|| right.and_then(|r| r.find_device_recursive()))
+            }
+            UOp::ReduceOps(op) => match op {
+                ReduceOps::Sum { parent, .. }
+                | ReduceOps::Max { parent, .. }
+                | ReduceOps::Min { parent, .. }
+                | ReduceOps::Mean { parent, .. } => parent.as_ref().find_device_recursive(),
+            },
+            UOp::MovementOps(op) => match op {
+                MovementOps::Reshape(inner, _)
+                | MovementOps::Permute(inner, _)
+                | MovementOps::Pad { parent: inner, .. } => inner.as_ref().find_device_recursive(),
+            },
+            UOp::LogicalOps(op) => {
+                let (left, right) = match op {
+                    LogicalOps::And(l, r) | LogicalOps::Or(l, r) | LogicalOps::Xor(l, r) => {
+                        (l.as_ref(), Some(r.as_ref()))
+                    }
+                    LogicalOps::Not(l, r) => (l.as_ref(), Some(r.as_ref())),
+                };
+                left.find_device_recursive()
+                    .or_else(|| right.and_then(|r| r.find_device_recursive()))
+            }
+            UOp::Const(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -11,6 +11,7 @@ rustc-hash = "2.0"
 axler-uop = { path = "../axler-uop" }
 axler-traits = { path = "../axler-traits" }
 axler-common = { path = "../axler-common" }
+futures = "0.3"
 
 [build-dependencies]
 cc = "1.0"
