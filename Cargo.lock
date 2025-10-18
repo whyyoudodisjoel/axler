@@ -115,6 +115,7 @@ dependencies = [
  "axler-uop",
  "candle-core",
  "criterion",
+ "futures",
  "pprof",
  "rand",
  "rayon",

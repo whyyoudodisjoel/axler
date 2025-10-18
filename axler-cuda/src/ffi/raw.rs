@@ -10,7 +10,8 @@ pub type CUdeviceptr = usize;
 pub type CUresult = c_uint;
 
 // Stream callback type
-pub type CUstreamCallback = extern "C" fn(hStream: CUstream, status: CUresult, userData: *mut c_void);
+pub type CUstreamCallback =
+    extern "C" fn(hStream: CUstream, status: CUresult, userData: *mut c_void);
 
 pub const CUDA_SUCCESS: CUresult = 0;
 pub const CUDA_ERROR_INVALID_VALUE: CUresult = 1;
@@ -100,8 +101,7 @@ extern "C" {
     pub fn cuEventRecord(hEvent: CUevent, hStream: CUstream) -> CUresult;
     pub fn cuEventSynchronize(hEvent: CUevent) -> CUresult;
     pub fn cuEventQuery(hEvent: CUevent) -> CUresult;
-    pub fn cuEventElapsedTime(pMilliseconds: *mut f32, hStart: CUevent, hEnd: CUevent)
-        -> CUresult;
+    pub fn cuEventElapsedTime(pMilliseconds: *mut f32, hStart: CUevent, hEnd: CUevent) -> CUresult;
 
     // Async memory operations
     pub fn cuMemcpyHtoDAsync_v2(

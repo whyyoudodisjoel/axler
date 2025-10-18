@@ -233,7 +233,6 @@ fn test_mean_reduce() {
     println!("Mean axis 1 test passed! Result: {:?}", output);
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn test_two_device_realize() {
     let buf = &[1., 2., 3., 4., 5., 6.];
@@ -264,18 +263,16 @@ fn test_reduce_with_device() {
     let sum = cuda_tensor.sum(None);
 
     // Target device should be CUDA
-    let target_device = sum.get_target_device();
+    let target_device = sum.uop.get_target_device();
     assert_eq!(target_device, DeviceType::CUDA);
 
     // Only try to realize if CUDA is available
-    #[cfg(feature = "cuda")]
     {
         let output = sum.to_vec::<f32>();
         assert_eq!(output, vec![21.0]);
         println!("Reduce with device test passed! Result: {:?}", output);
     }
 
-    #[cfg(not(feature = "cuda"))]
     {
         // Without CUDA, we just verify the graph construction
         println!(
@@ -300,7 +297,6 @@ fn test_sum_2d_cpu() {
     println!("CPU 2D sum test passed! Result: {}", output[0]);
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn test_sum_2d_cuda() {
     // Test sum on 2D tensor on CUDA like in the benchmark
@@ -316,4 +312,116 @@ fn test_sum_2d_cuda() {
     let expected: f32 = (0..size * size).map(|i| i as f32).sum();
     assert_eq!(output[0], expected);
     println!("CUDA 2D sum test passed! Result: {}", output[0]);
+}
+
+#[test]
+fn test_spawn_realize_single() {
+    let buf = &[1.0f32, 2.0, 3.0, 4.0];
+    let tensor = Tensor::from_slice(buf);
+    let tensor_cuda = tensor.to_device(DeviceType::CUDA);
+
+    let result = (&tensor_cuda + &tensor_cuda);
+
+    let handle = result.spawn_realize().expect("Failed to spawn realize");
+
+    let realized = futures::executor::block_on(handle).expect("Failed to realize");
+
+    let output: Vec<f32> = realized.to_vec();
+    assert_eq!(output, vec![2.0, 4.0, 6.0, 8.0]);
+    println!("Async single operation test passed! Result: {:?}", output);
+}
+
+#[test]
+fn test_spawn_realize_multiple_join() {
+    let buf1 = &[1.0f32, 2.0, 3.0, 4.0];
+    let buf2 = &[5.0f32, 6.0, 7.0, 8.0];
+    let buf3 = &[10.0f32, 20.0, 30.0, 40.0];
+
+    let t1 = Tensor::from_slice(buf1).to_device(DeviceType::CUDA);
+    let t2 = Tensor::from_slice(buf2).to_device(DeviceType::CUDA);
+    let t3 = Tensor::from_slice(buf3).to_device(DeviceType::CUDA);
+
+    let op1 = &t1 + &t1; // [2, 4, 6, 8]
+    let op2 = &t2 * &t2; // [25, 36, 49, 64]
+    let op3 = &t3 - &t1; // [9, 18, 27, 36]
+
+    let handle1 = op1.spawn_realize().expect("Failed to spawn op1");
+    let handle2 = op2.spawn_realize().expect("Failed to spawn op2");
+    let handle3 = op3.spawn_realize().expect("Failed to spawn op3");
+
+    let (result1, result2, result3) =
+        futures::executor::block_on(async { futures::join!(handle1, handle2, handle3) });
+
+    let output1: Vec<f32> = result1.expect("Op1 failed").to_vec();
+    let output2: Vec<f32> = result2.expect("Op2 failed").to_vec();
+    let output3: Vec<f32> = result3.expect("Op3 failed").to_vec();
+
+    assert_eq!(output1, vec![2.0, 4.0, 6.0, 8.0]);
+    assert_eq!(output2, vec![25.0, 36.0, 49.0, 64.0]);
+    assert_eq!(output3, vec![9.0, 18.0, 27.0, 36.0]);
+}
+
+#[test]
+fn test_spawn_realize_complex_graph() {
+    // Test async with complex computation graph
+    let buf = &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = Tensor::from_slice(buf).to_device(DeviceType::CUDA);
+
+    // Create complex operations
+    let doubled = &tensor + &tensor;
+    let squared = &tensor * &tensor;
+    let combined = &doubled * &squared; // (a+a) * (a*a) = 2a * a^2 = 2a^3
+
+    // Spawn async
+    let handle = combined.spawn_realize().expect("Failed to spawn");
+
+    // Await
+    let result = futures::executor::block_on(handle).expect("Failed to realize");
+    let output: Vec<f32> = result.to_vec();
+
+    // Expected: 2*1^3=2, 2*2^3=16, 2*3^3=54, 2*4^3=128, 2*5^3=250, 2*6^3=432
+    assert_eq!(output, vec![2.0, 16.0, 54.0, 128.0, 250.0, 432.0]);
+}
+
+#[test]
+fn test_spawn_realize_with_reduce() {
+    let buf = &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = Tensor::from_slice(buf).to_device(DeviceType::CUDA);
+
+    let tensor_2x3 = tensor.reshape(&[2, 3]);
+    let sum = tensor_2x3.sum(None);
+
+    let handle = sum.spawn_realize().expect("Failed to spawn");
+
+    let result = futures::executor::block_on(handle).expect("Failed to realize");
+    let output: Vec<f32> = result.to_vec();
+
+    assert_eq!(output, vec![21.0]);
+}
+
+#[test]
+fn test_spawn_realize_many_concurrent() {
+    let mut handles = Vec::new();
+
+    for i in 0..10 {
+        let val = (i as f32 + 1.0) * 10.0;
+        let buf = vec![val; 100];
+        let tensor = Tensor::from_slice(&buf).to_device(DeviceType::CUDA);
+
+        let result = &tensor + &tensor; // Should double each value
+        let handle = result.spawn_realize().expect("Failed to spawn");
+        handles.push((handle, val * 2.0));
+    }
+
+    let results = futures::executor::block_on(async {
+        futures::future::try_join_all(handles.into_iter().map(|(h, _)| h)).await
+    })
+    .expect("Failed to join all");
+
+    for (i, result) in results.iter().enumerate() {
+        let output: Vec<f32> = result.to_vec();
+        let expected = (i as f32 + 1.0) * 20.0;
+        assert_eq!(output[0], expected);
+        assert_eq!(output.len(), 100);
+    }
 }

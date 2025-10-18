@@ -2,14 +2,14 @@ pub mod async_ops;
 pub mod ffi;
 pub mod renderer;
 
-use axler_traits::{Device, KernelHandle, KernelInfo};
+use axler_traits::{Device, KernelHandle, KernelInfo, Renderer};
 use once_cell::sync::Lazy;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
-use crate::async_ops::{AsyncCudaContext, AsyncKernelExecution, AsyncMemcpy, CudaFuture};
+use crate::async_ops::{AsyncCudaContext, CudaFuture};
 use crate::ffi::nvrtc::compile_cuda_to_ptx;
 use crate::ffi::{CudaContext, CudaFunction, CudaModule, CudaStream};
 use crate::renderer::CudaRenderer;
@@ -115,7 +115,7 @@ impl CudaDevice {
     }
 
     /// Execute a kernel asynchronously on a specific stream
-    fn execute_async(
+    fn execute_async_on_stream(
         &mut self,
         kernel: KernelHandle,
         mut buffers: Vec<*mut c_void>,
@@ -132,8 +132,6 @@ impl CudaDevice {
 
         let (grid_size, block_size) = self.calculate_optimal_launch_config(*output_size);
 
-        let async_exec = AsyncKernelExecution::new(stream.clone())?;
-
         function
             .launch_async(
                 grid_size,
@@ -144,7 +142,7 @@ impl CudaDevice {
             )
             .expect("Failed to launch kernel asynchronously");
 
-        Ok(async_exec.completion_future())
+        Ok(CudaFuture::new(stream))
     }
 
     /// Execute a kernel asynchronously with auto-selected stream from context
@@ -159,46 +157,10 @@ impl CudaDevice {
             .ok_or("Async context not enabled. Call enable_async() first")?
             .get_stream();
 
-        self.execute_async(kernel, buffers, stream)
+        self.execute_async_on_stream(kernel, buffers, stream)
     }
 
     /// Async copy from host to device
-    pub async fn copy_host_device_async(
-        &mut self,
-        host_ptr: *const c_void,
-        device_ptr: *mut c_void,
-        size: usize,
-        dtype: axler_uop::DType,
-        stream: Arc<CudaStream>,
-    ) -> Result<(), String> {
-        self.ensure_context_current()
-            .expect("Failed to set CUDA context as current");
-
-        let bytes = Self::calculate_bytes(size, dtype);
-        let memcpy = AsyncMemcpy::new(stream);
-        memcpy
-            .copy_host_to_device(host_ptr as usize, device_ptr as usize, bytes)
-            .await
-    }
-
-    /// Async copy from device to host
-    pub async fn copy_device_host_async(
-        &self,
-        device_ptr: *const c_void,
-        host_ptr: *mut c_void,
-        size: usize,
-        dtype: axler_uop::DType,
-        stream: Arc<CudaStream>,
-    ) -> Result<(), String> {
-        self.ensure_context_current()
-            .expect("Failed to set CUDA context as current");
-
-        let bytes = Self::calculate_bytes(size, dtype);
-        let memcpy = AsyncMemcpy::new(stream);
-        memcpy
-            .copy_device_to_host(device_ptr as usize, host_ptr as usize, bytes)
-            .await
-    }
 
     /// Synchronize all async streams
     pub async fn synchronize_async(&self) -> Result<(), String> {
@@ -213,58 +175,6 @@ impl CudaDevice {
         let mut hasher = FxHasher::default();
         source_code.hash(&mut hasher);
         format!("{:x}", hasher.finish())
-    }
-
-    // Get or compile kernel with caching - avoids re-rendering if cached
-    pub fn get_or_compile_kernel(
-        &mut self,
-        uop: &axler_uop::UOp,
-        buffers: &[axler_uop::Buffer],
-    ) -> (KernelHandle, Vec<usize>, axler_uop::DType, usize) {
-        use axler_traits::Renderer;
-
-        // Compute UOp hash
-        let uop_hash = uop.compute_hash();
-
-        // Check if we have a cached source code hash for this UOp
-        if let Some(source_hash) = self.uop_to_source_cache.get(&uop_hash) {
-            // We've seen this UOp before, check if kernel is compiled
-            if let Some(&(handle, ref shape, dtype, size)) = self.kernel_cache.get(source_hash) {
-                return (handle as KernelHandle, shape.clone(), dtype, size);
-            }
-        }
-
-        // Need to render and compile
-        let lowered = self.renderer.lower_if_required(uop, buffers);
-        let source_code = self.renderer.render(&lowered, uop);
-        let source_hash = Self::get_kernel_hash(&source_code);
-
-        // Cache the UOp -> source mapping
-        self.uop_to_source_cache
-            .insert(uop_hash, source_hash.clone());
-
-        // Check if this source code was already compiled (different UOp, same source)
-        if let Some(&(handle, ref shape, dtype, size)) = self.kernel_cache.get(&source_hash) {
-            return (handle as KernelHandle, shape.clone(), dtype, size);
-        }
-
-        // Not cached, need to compile
-        let kernel_info = axler_traits::KernelInfo {
-            source_code,
-            output_shape: lowered.output_shape.clone(),
-            output_size: lowered.output_size,
-            output_dtype: lowered.output_dtype,
-        };
-
-        let handle = self
-            .compile(&kernel_info.source_code, &kernel_info)
-            .unwrap();
-        (
-            handle,
-            lowered.output_shape,
-            lowered.output_dtype,
-            lowered.output_size,
-        )
     }
 
     // TODO: Needs a better rewrite
@@ -453,6 +363,155 @@ impl Device for CudaDevice {
         // Remove from kernel cache
         self.kernel_cache
             .retain(|_, &mut (ptr, _, _, _)| ptr != func_ptr);
+    }
+
+    fn get_or_compile_kernel(
+        &mut self,
+        uop: &axler_uop::UOp,
+        buffers: &[axler_uop::Buffer],
+    ) -> (KernelHandle, Vec<usize>, axler_uop::DType, usize) {
+        use axler_traits::Renderer;
+
+        // Compute UOp hash
+        let uop_hash = uop.compute_hash();
+
+        // Check if we have a cached source code hash for this UOp
+        if let Some(source_hash) = self.uop_to_source_cache.get(&uop_hash) {
+            // We've seen this UOp before, check if kernel is compiled
+            if let Some(&(handle, ref shape, dtype, size)) = self.kernel_cache.get(source_hash) {
+                return (handle as KernelHandle, shape.clone(), dtype, size);
+            }
+        }
+
+        // Need to render and compile
+        let lowered = self.renderer.lower_if_required(uop, buffers);
+        let source_code = self.renderer.render(&lowered, uop);
+        let source_hash = Self::get_kernel_hash(&source_code);
+
+        // Cache the UOp -> source mapping
+        self.uop_to_source_cache
+            .insert(uop_hash, source_hash.clone());
+
+        // Check if this source code was already compiled (different UOp, same source)
+        if let Some(&(handle, ref shape, dtype, size)) = self.kernel_cache.get(&source_hash) {
+            return (handle as KernelHandle, shape.clone(), dtype, size);
+        }
+
+        // Not cached, need to compile
+        let kernel_info = axler_traits::KernelInfo {
+            source_code,
+            output_shape: lowered.output_shape.clone(),
+            output_size: lowered.output_size,
+            output_dtype: lowered.output_dtype,
+        };
+
+        let handle = self
+            .compile(&kernel_info.source_code, &kernel_info)
+            .unwrap();
+        (
+            handle,
+            lowered.output_shape,
+            lowered.output_dtype,
+            lowered.output_size,
+        )
+    }
+}
+
+impl axler_traits::AsyncDevice for CudaDevice {
+    type DeviceFuture = CudaFuture;
+
+    fn execute_async(
+        &mut self,
+        kernel: KernelHandle,
+        buffers: Vec<*mut c_void>,
+    ) -> Result<Self::DeviceFuture, String> {
+        // Get stream from async context, or create a new one
+        let stream = if let Some(ctx) = &self.async_context {
+            ctx.get_stream()
+        } else {
+            // If no async context, create a single stream
+            Arc::new(CudaStream::new()?)
+        };
+
+        // Reuse the existing helper method
+        self.execute_async_on_stream(kernel, buffers, stream)
+    }
+
+    fn allocate_async(&mut self, size: usize, dtype: axler_uop::DType) -> *mut c_void {
+        // For now, CUDA allocation is fast enough to be synchronous
+        // In the future, could use memory pools or stream-ordered allocations
+        self.allocate(size, dtype)
+    }
+
+    fn copy_host_device_async(
+        &mut self,
+        host_ptr: *const c_void,
+        device_ptr: *mut c_void,
+        size: usize,
+        dtype: axler_uop::DType,
+    ) -> Result<Self::DeviceFuture, String> {
+        self.ensure_context_current()
+            .map_err(|e| format!("Failed to set CUDA context: {}", e))?;
+
+        let bytes = Self::calculate_bytes(size, dtype);
+
+        // Get stream from async context
+        let stream = if let Some(ctx) = &self.async_context {
+            ctx.get_stream()
+        } else {
+            Arc::new(CudaStream::new()?)
+        };
+
+        use crate::ffi::cuMemcpyHtoDAsync_v2;
+        unsafe {
+            crate::ffi::check_cuda_error(cuMemcpyHtoDAsync_v2(
+                device_ptr as usize,
+                host_ptr,
+                bytes,
+                stream.raw(),
+            ))
+            .map_err(|e| format!("Failed to async copy from host to device: {}", e))?;
+        }
+
+        Ok(CudaFuture::new(stream))
+    }
+
+    fn copy_device_host_async(
+        &self,
+        device_ptr: *const c_void,
+        host_ptr: *mut c_void,
+        size: usize,
+        dtype: axler_uop::DType,
+    ) -> Result<Self::DeviceFuture, String> {
+        self.ensure_context_current()
+            .map_err(|e| format!("Failed to set CUDA context: {}", e))?;
+
+        let bytes = Self::calculate_bytes(size, dtype);
+
+        // Get stream from async context
+        let stream = if let Some(ctx) = &self.async_context {
+            ctx.get_stream()
+        } else {
+            Arc::new(CudaStream::new()?)
+        };
+
+        use crate::ffi::cuMemcpyDtoHAsync_v2;
+        unsafe {
+            crate::ffi::check_cuda_error(cuMemcpyDtoHAsync_v2(
+                host_ptr,
+                device_ptr as usize,
+                bytes,
+                stream.raw(),
+            ))
+            .map_err(|e| format!("Failed to async copy from device to host: {}", e))?;
+        }
+
+        Ok(CudaFuture::new(stream))
+    }
+
+    fn deallocate_async(&mut self, ptr: *mut c_void, size: usize, dtype: axler_uop::DType) {
+        // Deallocation can be done synchronously as it's just returning to the pool
+        self.deallocate(ptr, size, dtype);
     }
 }
 

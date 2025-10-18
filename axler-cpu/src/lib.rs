@@ -78,47 +78,6 @@ impl CpuDevice {
         source_code.hash(&mut hasher);
         format!("{:x}", hasher.finish())
     }
-
-    pub fn get_or_compile_kernel(
-        &mut self,
-        uop: &UOp,
-        buffers: &[Buffer],
-    ) -> (KernelHandle, Vec<usize>, axler_uop::DType, usize) {
-        let uop_hash = uop.compute_hash();
-
-        if let Some(source_hash) = self.uop_to_source_cache.get(&uop_hash) {
-            if let Some(&(handle, ref shape, dtype, size)) = self.kernel_handles.get(source_hash) {
-                return (handle as KernelHandle, shape.clone(), dtype, size);
-            }
-        }
-
-        let lowered = self.renderer.lower_if_required(uop, buffers);
-        let source_code = self.renderer.render(&lowered, uop);
-        let source_hash = Self::get_kernel_hash(&source_code);
-
-        self.uop_to_source_cache
-            .insert(uop_hash, source_hash.clone());
-
-        if let Some(&(handle, ref shape, dtype, size)) = self.kernel_handles.get(&source_hash) {
-            return (handle as KernelHandle, shape.clone(), dtype, size);
-        }
-
-        let kernel_info = KernelInfo {
-            source_code,
-            output_shape: lowered.output_shape.clone(),
-            output_size: lowered.output_size,
-            output_dtype: lowered.output_dtype,
-        };
-        let handle = self
-            .compile(&kernel_info.source_code, &kernel_info)
-            .unwrap();
-        (
-            handle,
-            lowered.output_shape,
-            lowered.output_dtype,
-            lowered.output_size,
-        )
-    }
 }
 
 impl Device for CpuDevice {
@@ -315,6 +274,47 @@ impl Device for CpuDevice {
         }
 
         self.release_buffer(ptr, size, dtype);
+    }
+
+    fn get_or_compile_kernel(
+        &mut self,
+        uop: &UOp,
+        buffers: &[Buffer],
+    ) -> (KernelHandle, Vec<usize>, axler_uop::DType, usize) {
+        let uop_hash = uop.compute_hash();
+
+        if let Some(source_hash) = self.uop_to_source_cache.get(&uop_hash) {
+            if let Some(&(handle, ref shape, dtype, size)) = self.kernel_handles.get(source_hash) {
+                return (handle as KernelHandle, shape.clone(), dtype, size);
+            }
+        }
+
+        let lowered = self.renderer.lower_if_required(uop, buffers);
+        let source_code = self.renderer.render(&lowered, uop);
+        let source_hash = Self::get_kernel_hash(&source_code);
+
+        self.uop_to_source_cache
+            .insert(uop_hash, source_hash.clone());
+
+        if let Some(&(handle, ref shape, dtype, size)) = self.kernel_handles.get(&source_hash) {
+            return (handle as KernelHandle, shape.clone(), dtype, size);
+        }
+
+        let kernel_info = KernelInfo {
+            source_code,
+            output_shape: lowered.output_shape.clone(),
+            output_size: lowered.output_size,
+            output_dtype: lowered.output_dtype,
+        };
+        let handle = self
+            .compile(&kernel_info.source_code, &kernel_info)
+            .unwrap();
+        (
+            handle,
+            lowered.output_shape,
+            lowered.output_dtype,
+            lowered.output_size,
+        )
     }
 }
 
