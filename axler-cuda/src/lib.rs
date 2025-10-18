@@ -1,3 +1,4 @@
+pub mod async_ops;
 pub mod ffi;
 pub mod renderer;
 
@@ -8,9 +9,11 @@ use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
+use crate::async_ops::{AsyncCudaContext, AsyncKernelExecution, AsyncMemcpy, CudaFuture};
 use crate::ffi::nvrtc::compile_cuda_to_ptx;
-use crate::ffi::{CudaContext, CudaFunction, CudaModule};
+use crate::ffi::{CudaContext, CudaFunction, CudaModule, CudaStream};
 use crate::renderer::CudaRenderer;
+use std::sync::Arc;
 
 // Wrapper to make raw device pointers Send (we ensure thread safety with mutex)
 // Stores raw CUdeviceptr for manual memory management
@@ -30,6 +33,8 @@ pub struct CudaDevice {
     uop_to_source_cache: FxHashMap<u64, String>,
     // Memory pool for reusing allocations (size -> list of free buffers)
     memory_pool: FxHashMap<(usize, axler_uop::DType), Vec<SendDevicePtr>>,
+    // Async context for stream-based operations
+    async_context: Option<Arc<AsyncCudaContext>>,
 }
 
 impl CudaDevice {
@@ -94,7 +99,114 @@ impl CudaDevice {
             kernel_cache: FxHashMap::default(),
             uop_to_source_cache: FxHashMap::default(),
             memory_pool: FxHashMap::default(),
+            async_context: None,
         })
+    }
+
+    /// Enable async operations with the specified number of streams
+    pub fn enable_async(&mut self, num_streams: usize) -> Result<(), String> {
+        self.async_context = Some(Arc::new(AsyncCudaContext::new(num_streams)?));
+        Ok(())
+    }
+
+    /// Get the async context (if enabled)
+    pub fn async_context(&self) -> Option<&Arc<AsyncCudaContext>> {
+        self.async_context.as_ref()
+    }
+
+    /// Execute a kernel asynchronously on a specific stream
+    fn execute_async(
+        &mut self,
+        kernel: KernelHandle,
+        mut buffers: Vec<*mut c_void>,
+        stream: Arc<CudaStream>,
+    ) -> Result<CudaFuture, String> {
+        self.ensure_context_current()
+            .expect("Failed to set CUDA context as current");
+
+        let func_ptr = kernel as usize;
+        let (_, function, output_size) = self
+            .loaded_kernels
+            .get(&func_ptr)
+            .expect("Invalid kernel handle");
+
+        let (grid_size, block_size) = self.calculate_optimal_launch_config(*output_size);
+
+        let async_exec = AsyncKernelExecution::new(stream.clone())?;
+
+        function
+            .launch_async(
+                grid_size,
+                block_size,
+                0, // shared memory
+                &mut buffers,
+                &stream,
+            )
+            .expect("Failed to launch kernel asynchronously");
+
+        Ok(async_exec.completion_future())
+    }
+
+    /// Execute a kernel asynchronously with auto-selected stream from context
+    pub async fn execute_async_auto(
+        &mut self,
+        kernel: KernelHandle,
+        buffers: Vec<*mut c_void>,
+    ) -> Result<CudaFuture, String> {
+        let stream = self
+            .async_context
+            .as_ref()
+            .ok_or("Async context not enabled. Call enable_async() first")?
+            .get_stream();
+
+        self.execute_async(kernel, buffers, stream)
+    }
+
+    /// Async copy from host to device
+    pub async fn copy_host_device_async(
+        &mut self,
+        host_ptr: *const c_void,
+        device_ptr: *mut c_void,
+        size: usize,
+        dtype: axler_uop::DType,
+        stream: Arc<CudaStream>,
+    ) -> Result<(), String> {
+        self.ensure_context_current()
+            .expect("Failed to set CUDA context as current");
+
+        let bytes = Self::calculate_bytes(size, dtype);
+        let memcpy = AsyncMemcpy::new(stream);
+        memcpy
+            .copy_host_to_device(host_ptr as usize, device_ptr as usize, bytes)
+            .await
+    }
+
+    /// Async copy from device to host
+    pub async fn copy_device_host_async(
+        &self,
+        device_ptr: *const c_void,
+        host_ptr: *mut c_void,
+        size: usize,
+        dtype: axler_uop::DType,
+        stream: Arc<CudaStream>,
+    ) -> Result<(), String> {
+        self.ensure_context_current()
+            .expect("Failed to set CUDA context as current");
+
+        let bytes = Self::calculate_bytes(size, dtype);
+        let memcpy = AsyncMemcpy::new(stream);
+        memcpy
+            .copy_device_to_host(device_ptr as usize, host_ptr as usize, bytes)
+            .await
+    }
+
+    /// Synchronize all async streams
+    pub async fn synchronize_async(&self) -> Result<(), String> {
+        if let Some(ctx) = &self.async_context {
+            ctx.synchronize_all().await
+        } else {
+            Ok(())
+        }
     }
 
     fn get_kernel_hash(source_code: &str) -> String {
