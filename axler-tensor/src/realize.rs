@@ -2,8 +2,6 @@ use axler_cpu::get_cpu_device;
 use axler_traits::Device;
 use axler_uop::{DeviceType, UOp};
 use std::ffi::c_void;
-use std::future::Future;
-use std::pin::Pin;
 
 use crate::Tensor;
 
@@ -22,6 +20,10 @@ impl Tensor {
         }
 
         let target_device = self.uop.get_target_device();
+
+        if let Err(e) = self.uop.validate_single_kernel_execution(target_device) {
+            panic!("{}", e);
+        }
 
         let (_kernel_ptr, output_buffer, output_shape, output_dtype, output_size) =
             match target_device {

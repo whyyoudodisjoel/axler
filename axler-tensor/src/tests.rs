@@ -4,17 +4,6 @@ use crate::Tensor;
 use axler_uop::DeviceType;
 
 #[test]
-fn test_dummy() {
-    let d: Vec<f32> = rand::random_iter().take(100).collect::<Vec<_>>();
-    let t = Tensor::from_slice(&d);
-    let t = t.reshape(&[10, 10]);
-
-    let t = &t + &t;
-
-    let t = t.realize();
-}
-
-#[test]
 fn test_realize() {
     let buf = &[1., 2., 3., 4.];
     let tensor = Tensor::from_slice(&buf[..]);
@@ -234,25 +223,6 @@ fn test_mean_reduce() {
 }
 
 #[test]
-fn test_two_device_realize() {
-    let buf = &[1., 2., 3., 4., 5., 6.];
-    let tensor = Tensor::from_slice(&buf[..]);
-
-    let res = (&tensor + &tensor);
-    let res = &res * &tensor;
-
-    let tmp: Vec<f32> = res.to_vec();
-
-    println!("CPU Res: {:?}", tmp.to_vec());
-    let res = res.to_device(DeviceType::CUDA);
-    let res = &res + &res;
-
-    let res: Vec<f32> = res.to_vec();
-
-    println!("Result: {:?}", res);
-}
-
-#[test]
 fn test_reduce_with_device() {
     // Test reduce operations with device transfers
     let buf = &[1., 2., 3., 4., 5., 6.];
@@ -402,6 +372,7 @@ fn test_spawn_realize_with_reduce() {
 #[test]
 fn test_spawn_realize_many_concurrent() {
     let mut handles = Vec::new();
+    let mut buffers = Vec::new(); // Keep buffers alive
 
     for i in 0..10 {
         let val = (i as f32 + 1.0) * 10.0;
@@ -411,6 +382,7 @@ fn test_spawn_realize_many_concurrent() {
         let result = &tensor + &tensor; // Should double each value
         let handle = result.spawn_realize().expect("Failed to spawn");
         handles.push((handle, val * 2.0));
+        buffers.push(buf); // Keep buffer alive until async ops complete
     }
 
     let results = futures::executor::block_on(async {
@@ -424,4 +396,20 @@ fn test_spawn_realize_many_concurrent() {
         assert_eq!(output[0], expected);
         assert_eq!(output.len(), 100);
     }
+}
+
+#[should_panic]
+#[test]
+fn test_tensors_on_different_device_realize(){
+    let tensor = Tensor::from_slice(&[1., 2., 3., 4.]);
+    let tensor1 = Tensor::from_slice(&[1., 2., 3., 4.]);
+
+    let cpu_res = &tensor1 + &tensor;
+
+    let cpu_to_gpu = cpu_res.to_device(DeviceType::CUDA);
+    let gpu_tensor = Tensor::from_slice(&[1., 2., 3., 4.]).to_device(DeviceType::CUDA);
+    let res = (&gpu_tensor + &cpu_to_gpu).realize();
+
+    let res: Vec<f32> = res.to_vec();
+    println!("Result: {res:?}");
 }

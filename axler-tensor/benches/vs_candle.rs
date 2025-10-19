@@ -2,7 +2,7 @@ use axler_tensor::Tensor as TinyTensor;
 use candle_core::{Device, Tensor as CandleTensor};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
-#[cfg(feature = "cuda")]
+
 use axler_uop::DeviceType;
 
 fn benchmark_add(c: &mut Criterion) {
@@ -326,7 +326,7 @@ fn benchmark_fusion(c: &mut Criterion) {
 // CUDA Benchmarks
 // ============================================================================
 
-#[cfg(feature = "cuda")]
+
 fn benchmark_add_cuda(c: &mut Criterion) {
     let mut group = c.benchmark_group("add_cuda");
     group.sample_size(10); // Reduced from 100 to avoid GPU OOM
@@ -364,7 +364,7 @@ fn benchmark_add_cuda(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "cuda")]
+
 fn benchmark_mul_cuda(c: &mut Criterion) {
     let mut group = c.benchmark_group("mul_cuda");
     group.sample_size(10);
@@ -410,7 +410,7 @@ fn benchmark_mul_cuda(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "cuda")]
+
 fn benchmark_sum_cuda(c: &mut Criterion) {
     let mut group = c.benchmark_group("sum_cuda");
     group.sample_size(10);
@@ -446,7 +446,7 @@ fn benchmark_sum_cuda(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "cuda")]
+
 fn benchmark_fusion_cuda(c: &mut Criterion) {
     let mut group = c.benchmark_group("fusion_cuda");
     group.sample_size(10);
@@ -527,7 +527,7 @@ criterion_group!(
 );
 
 // CUDA benchmarks group (only compiled with cuda feature)
-#[cfg(feature = "cuda")]
+
 criterion_group!(
     cuda_benches,
     benchmark_add_cuda,
@@ -537,8 +537,5 @@ criterion_group!(
 );
 
 // Main entry point - conditionally includes CUDA benchmarks
-#[cfg(feature = "cuda")]
-criterion_main!(cuda_benches);
 
-#[cfg(not(feature = "cuda"))]
-criterion_main!(cpu_benches);
+criterion_main!(cuda_benches, cpu_benches);
