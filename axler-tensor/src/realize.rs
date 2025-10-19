@@ -21,10 +21,6 @@ impl Tensor {
 
         let target_device = self.uop.get_target_device();
 
-        if let Err(e) = self.uop.validate_single_kernel_execution(target_device) {
-            panic!("{}", e);
-        }
-
         let (_kernel_ptr, output_buffer, output_shape, output_dtype, output_size) =
             match target_device {
                 DeviceType::CPU => {

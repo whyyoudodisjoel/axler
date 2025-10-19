@@ -372,17 +372,16 @@ fn test_spawn_realize_with_reduce() {
 #[test]
 fn test_spawn_realize_many_concurrent() {
     let mut handles = Vec::new();
-    let mut buffers = Vec::new(); // Keep buffers alive
 
     for i in 0..10 {
         let val = (i as f32 + 1.0) * 10.0;
         let buf = vec![val; 100];
         let tensor = Tensor::from_slice(&buf).to_device(DeviceType::CUDA);
+        // to_device() now realizes and copies to GPU, so buf can be dropped
 
         let result = &tensor + &tensor; // Should double each value
         let handle = result.spawn_realize().expect("Failed to spawn");
         handles.push((handle, val * 2.0));
-        buffers.push(buf); // Keep buffer alive until async ops complete
     }
 
     let results = futures::executor::block_on(async {
@@ -398,18 +397,40 @@ fn test_spawn_realize_many_concurrent() {
     }
 }
 
-#[should_panic]
 #[test]
-fn test_tensors_on_different_device_realize(){
+fn test_to_device_realizes_parent(){
+    use axler_uop::UOp;
+
+    // Test that to_device() realizes unrealized computations first
     let tensor = Tensor::from_slice(&[1., 2., 3., 4.]);
     let tensor1 = Tensor::from_slice(&[1., 2., 3., 4.]);
 
-    let cpu_res = &tensor1 + &tensor;
+    let cpu_res = &tensor1 + &tensor; // Unrealized CPU computation
 
+    // to_device() should realize cpu_res on CPU first, then copy to GPU
     let cpu_to_gpu = cpu_res.to_device(DeviceType::CUDA);
+
+    // Verify it's now a Load wrapping a realized Kernel
+    match &cpu_to_gpu.uop {
+        UOp::Load(parent, device) => {
+            assert_eq!(*device, DeviceType::CUDA);
+            assert!(matches!(parent.as_ref(), UOp::Kernel(_, _, _, DeviceType::CPU)));
+        }
+        _ => panic!("Expected Load node"),
+    }
+
     let gpu_tensor = Tensor::from_slice(&[1., 2., 3., 4.]).to_device(DeviceType::CUDA);
     let res = (&gpu_tensor + &cpu_to_gpu).realize();
 
     let res: Vec<f32> = res.to_vec();
-    println!("Result: {res:?}");
+    assert_eq!(res, vec![3.0, 6.0, 9.0, 12.0]);
+}
+
+#[test]
+fn test_kernel(){
+    let t: Vec<f32> = Tensor::from_slice(&[1., 2., 3., 4.]).reshape(&[2, 2]).to_device(DeviceType::CUDA).sum(Some(1)).realize().to_vec();
+
+    // Should preserve the reshape??
+    println!("Res: {t:?}");
+    // let t = Tensor::from_slice(&[1., 2., 3., 4.]).to_device(DeviceType::CUDA);
 }

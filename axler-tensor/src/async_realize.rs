@@ -169,8 +169,6 @@ impl Tensor {
             return Err("spawn_realize only supports CUDA. Use realize() for CPU.".to_string());
         }
 
-        self.uop.validate_single_kernel_execution(target_device)?;
-
         let buffers = self.uop.extract_buffers();
 
         for buf in &buffers {
