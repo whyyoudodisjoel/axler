@@ -1,6 +1,7 @@
 use std::{
     ffi::c_void,
     hash::{Hash, Hasher},
+    sync::Arc,
 };
 
 #[derive(Debug, Clone)]
@@ -52,17 +53,68 @@ impl Debug for BufferPtr {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+// Inner buffer data that will be reference counted
+#[derive(Debug)]
+struct BufferInner {
+    dtype: DType,
+    ptr: BufferPtr,
+    device: DeviceType,
+    size: usize, // Number of elements (not bytes)
+}
+
+#[derive(Debug, Clone)]
 pub struct Buffer {
-    pub dtype: DType,
-    pub ptr: BufferPtr,
-    pub device: DeviceType,
-    pub size: usize, // Number of elements (not bytes)
+    inner: Arc<BufferInner>,
+}
+
+impl Buffer {
+    pub fn new(dtype: DType, ptr: BufferPtr, device: DeviceType, size: usize) -> Self {
+        Self {
+            inner: Arc::new(BufferInner {
+                dtype,
+                ptr,
+                device,
+                size,
+            }),
+        }
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.inner.dtype
+    }
+
+    pub fn ptr(&self) -> BufferPtr {
+        self.inner.ptr
+    }
+
+    pub fn device(&self) -> DeviceType {
+        self.inner.device
+    }
+
+    pub fn size(&self) -> usize {
+        self.inner.size
+    }
+
+    pub fn get_raw_ptr(&self) -> *const c_void {
+        unsafe {
+            match self.inner.dtype {
+                DType::F32 => self.inner.ptr.f32 as *const c_void,
+                DType::U32 => self.inner.ptr.u32 as *const c_void,
+                DType::U8 => self.inner.ptr.u8 as *const c_void,
+            }
+        }
+    }
+
+    pub fn is_last_reference(&self) -> bool {
+        Arc::strong_count(&self.inner) == 1
+    }
 }
 
 impl PartialEq for Buffer {
     fn eq(&self, other: &Self) -> bool {
-        self.dtype == other.dtype && self.device == other.device && self.ptr_equals(&other.ptr)
+        self.dtype() == other.dtype()
+            && self.device() == other.device()
+            && self.ptr_equals(&other.ptr())
     }
 }
 
@@ -70,13 +122,13 @@ impl Eq for Buffer {}
 
 impl Hash for Buffer {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.dtype.hash(state);
-        self.device.hash(state);
+        self.dtype().hash(state);
+        self.device().hash(state);
         unsafe {
-            match self.dtype {
-                DType::F32 => (self.ptr.f32 as *const f32).hash(state),
-                DType::U32 => (self.ptr.u32 as *const u32).hash(state),
-                DType::U8 => (self.ptr.u8 as *const u8).hash(state),
+            match self.dtype() {
+                DType::F32 => (self.ptr().f32 as *const f32).hash(state),
+                DType::U32 => (self.ptr().u32 as *const u32).hash(state),
+                DType::U8 => (self.ptr().u8 as *const u8).hash(state),
             }
         }
     }
@@ -85,30 +137,30 @@ impl Hash for Buffer {
 impl Buffer {
     fn ptr_equals(&self, other: &BufferPtr) -> bool {
         unsafe {
-            match self.dtype {
-                DType::F32 => self.ptr.f32 as *const f32 == other.f32 as *const f32,
-                DType::U32 => self.ptr.u32 as *const u32 == other.u32 as *const u32,
-                DType::U8 => self.ptr.u8 as *const u8 == other.u8 as *const u8,
+            match self.dtype() {
+                DType::F32 => self.ptr().f32 as *const f32 == other.f32 as *const f32,
+                DType::U32 => self.ptr().u32 as *const u32 == other.u32 as *const u32,
+                DType::U8 => self.ptr().u8 as *const u8 == other.u8 as *const u8,
             }
         }
     }
 
     pub fn get_buffer_ptr(&self) -> *const c_void {
         unsafe {
-            match self.dtype {
-                DType::F32 => (*self.ptr.f32).as_ptr() as *const c_void,
-                DType::U32 => (*self.ptr.u32).as_ptr() as *const c_void,
-                DType::U8 => (*self.ptr.u8).as_ptr() as *const c_void,
+            match self.dtype() {
+                DType::F32 => (*self.ptr().f32).as_ptr() as *const c_void,
+                DType::U32 => (*self.ptr().u32).as_ptr() as *const c_void,
+                DType::U8 => (*self.ptr().u8).as_ptr() as *const c_void,
             }
         }
     }
 
     pub fn get_buffer_size(&self) -> usize {
         unsafe {
-            match self.dtype {
-                DType::F32 => (&*self.ptr.f32).len(),
-                DType::U32 => (&*self.ptr.u32).len(),
-                DType::U8 => (&*self.ptr.u8).len(),
+            match self.dtype() {
+                DType::F32 => (&*self.ptr().f32).len(),
+                DType::U32 => (&*self.ptr().u32).len(),
+                DType::U8 => (&*self.ptr().u8).len(),
             }
         }
     }
@@ -149,7 +201,7 @@ impl UOp {
         match &self {
             UOp::Load(_, device) => *device,
             UOp::Kernel(_, _, _, device) => *device,
-            UOp::Buffer(buf) => buf.device,
+            UOp::Buffer(buf) => buf.device(),
             _ => self.find_device_recursive().unwrap_or(DeviceType::CPU),
         }
     }
@@ -158,7 +210,7 @@ impl UOp {
         match self {
             UOp::Load(_, device) => Some(*device),
             UOp::Kernel(_, _, _, device) => Some(*device),
-            UOp::Buffer(buf) => Some(buf.device),
+            UOp::Buffer(buf) => Some(buf.device()),
             UOp::ALUOps(op) => {
                 let (left, right) = match op {
                     ALUOps::Add(l, r)
@@ -195,7 +247,6 @@ impl UOp {
             UOp::Const(_) => None,
         }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -292,10 +343,10 @@ impl UOp {
         match self {
             UOp::Buffer(buf) => {
                 let size = unsafe {
-                    match buf.dtype {
-                        DType::F32 => (&(*buf.ptr.f32)).len(),
-                        DType::U32 => (&(*buf.ptr.u32)).len(),
-                        DType::U8 => (&(*buf.ptr.u8)).len(),
+                    match buf.dtype() {
+                        DType::F32 => (&(*buf.ptr().f32)).len(),
+                        DType::U32 => (&(*buf.ptr().u32)).len(),
+                        DType::U8 => (&(*buf.ptr().u8)).len(),
                     }
                 };
                 vec![size]
@@ -366,7 +417,7 @@ impl UOp {
 
     pub fn dtype(&self) -> DType {
         match self {
-            UOp::Buffer(buf) => buf.dtype,
+            UOp::Buffer(buf) => buf.dtype(),
             UOp::Const(c) => c.dtype,
             UOp::ALUOps(op) => match op {
                 ALUOps::Add(left, _)
@@ -389,7 +440,7 @@ impl UOp {
                 MovementOps::Pad { parent, .. } => parent.as_ref().dtype(),
             },
             UOp::Load(parent, _) => parent.as_ref().dtype(),
-            UOp::Kernel(_, buf, _, _) => buf.dtype,
+            UOp::Kernel(_, buf, _, _) => buf.dtype(),
             UOp::ReduceOps(op) => match op {
                 ReduceOps::Sum { parent, .. }
                 | ReduceOps::Max { parent, .. }
@@ -436,7 +487,7 @@ impl UOp {
 
         match self {
             UOp::Buffer(buf) => {
-                buffers.push(*buf);
+                buffers.push(buf.clone());
             }
             UOp::Const(_) => {
                 // Leaf node, no buffers
@@ -483,7 +534,7 @@ impl UOp {
                 parent.as_ref().extract_buffers_recursive(buffers, visited);
             }
             UOp::Kernel(_, buf, _, _) => {
-                buffers.push(*buf);
+                buffers.push(buf.clone());
                 // Don't traverse the AST part - it's already realized
             }
         }
@@ -574,14 +625,14 @@ impl UOp {
                     device.hash(hasher);
                 }
                 UOp::Buffer(buf) => {
-                    buf.dtype.hash(hasher);
-                    buf.device.hash(hasher);
+                    buf.dtype().hash(hasher);
+                    buf.device().hash(hasher);
                     // Hash the buffer size, not the pointer
                     unsafe {
-                        match buf.dtype {
-                            DType::F32 => (&*buf.ptr.f32).len().hash(hasher),
-                            DType::U32 => (&*buf.ptr.u32).len().hash(hasher),
-                            DType::U8 => (&*buf.ptr.u8).len().hash(hasher),
+                        match buf.dtype() {
+                            DType::F32 => (&*buf.ptr().f32).len().hash(hasher),
+                            DType::U32 => (&*buf.ptr().u32).len().hash(hasher),
+                            DType::U8 => (&*buf.ptr().u8).len().hash(hasher),
                         }
                     }
                 }
@@ -681,8 +732,8 @@ impl UOp {
                 },
                 UOp::Kernel(inner, buf, shape, device) => {
                     hash_uop_recursive(inner, hasher);
-                    buf.dtype.hash(hasher);
-                    buf.device.hash(hasher);
+                    buf.dtype().hash(hasher);
+                    buf.device().hash(hasher);
                     shape.hash(hasher);
                     device.hash(hasher);
                 }

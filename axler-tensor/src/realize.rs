@@ -41,9 +41,9 @@ impl Tensor {
                 }
             };
 
-        let buffer = axler_uop::Buffer {
-            dtype: output_dtype,
-            ptr: unsafe {
+        let buffer = axler_uop::Buffer::new(
+            output_dtype,
+            unsafe {
                 match output_dtype {
                     axler_uop::DType::F32 => axler_uop::BufferPtr {
                         f32: std::slice::from_raw_parts(output_buffer as *const f32, output_size),
@@ -56,9 +56,9 @@ impl Tensor {
                     },
                 }
             },
-            device: target_device,
-            size: output_size,
-        };
+            target_device,
+            output_size,
+        );
 
         Tensor {
             uop: UOp::Kernel(
@@ -84,10 +84,10 @@ impl Tensor {
         let buffers = self.uop.extract_buffers();
 
         for buf in &buffers {
-            if buf.device != target_device && buf.device != DeviceType::CPU {
+            if buf.device() != target_device && buf.device() != DeviceType::CPU {
                 panic!(
                     "Cannot execute kernel with buffers on different devices. Found buffer on {:?}, expected {:?}",
-                    buf.device, target_device
+                    buf.device(), target_device
                 );
             }
         }
@@ -115,13 +115,13 @@ impl Tensor {
                 .iter()
                 .map(|buf| {
                     // Check if buffer is already on CUDA device
-                    if buf.device == DeviceType::CUDA {
+                    if buf.device() == DeviceType::CUDA {
                         buf.get_buffer_ptr() as *mut c_void
                     } else {
                         let size = buf.get_buffer_size();
-                        let device_buf = device.allocate(size, buf.dtype);
+                        let device_buf = device.allocate(size, buf.dtype());
                         let host_ptr = buf.get_buffer_ptr();
-                        device.copy_host_device(host_ptr, device_buf, size, buf.dtype);
+                        device.copy_host_device(host_ptr, device_buf, size, buf.dtype());
                         device_buf
                     }
                 })
@@ -140,10 +140,10 @@ impl Tensor {
         // Free temporary device buffers that were allocated for host->device copies
         if target_device == DeviceType::CUDA {
             for (i, buf) in buffers.iter().enumerate() {
-                if buf.device != DeviceType::CUDA {
+                if buf.device() != DeviceType::CUDA {
                     // This was a temporary buffer we allocated
                     let size = buf.get_buffer_size();
-                    device.deallocate(buffer_ptrs[i], size, buf.dtype);
+                    device.deallocate(buffer_ptrs[i], size, buf.dtype());
                 }
             }
         }
@@ -160,32 +160,32 @@ impl Tensor {
     pub fn to_vec<T: axler_uop::ToDType + Clone + Default>(&self) -> Vec<T> {
         let realized = self.realize();
 
-        let buffer = match realized.uop {
-            UOp::Kernel(_, buf, _, _) => buf,
+        let buffer = match &realized.uop {
+            UOp::Kernel(_, buf, _, _) => buf.clone(),
             _ => panic!("Failed to realize tensor"),
         };
 
-        if buffer.dtype != T::dtype() {
+        if buffer.dtype() != T::dtype() {
             panic!(
                 "Type mismatch: tensor has dtype {:?} but requested type has dtype {:?}",
-                buffer.dtype,
+                buffer.dtype(),
                 T::dtype()
             );
         }
 
         let size = buffer.get_buffer_size();
 
-        match buffer.device {
+        match buffer.device() {
             axler_uop::DeviceType::CPU => unsafe {
-                let slice = match buffer.dtype {
+                let slice = match buffer.dtype() {
                     axler_uop::DType::F32 => {
-                        std::slice::from_raw_parts((*buffer.ptr.f32).as_ptr() as *const T, size)
+                        std::slice::from_raw_parts((*buffer.ptr().f32).as_ptr() as *const T, size)
                     }
                     axler_uop::DType::U32 => {
-                        std::slice::from_raw_parts((*buffer.ptr.u32).as_ptr() as *const T, size)
+                        std::slice::from_raw_parts((*buffer.ptr().u32).as_ptr() as *const T, size)
                     }
                     axler_uop::DType::U8 => {
-                        std::slice::from_raw_parts((*buffer.ptr.u8).as_ptr() as *const T, size)
+                        std::slice::from_raw_parts((*buffer.ptr().u8).as_ptr() as *const T, size)
                     }
                 };
                 slice.to_vec()
@@ -202,7 +202,12 @@ impl Tensor {
                             let device_ptr = buffer.get_buffer_ptr();
 
                             // Use CUDA device's copy_device_host to transfer from CUDA to CPU
-                            cuda_device.copy_device_host(device_ptr, host_ptr, size, buffer.dtype);
+                            cuda_device.copy_device_host(
+                                device_ptr,
+                                host_ptr,
+                                size,
+                                buffer.dtype(),
+                            );
                             return host_vec;
                         }
                     }

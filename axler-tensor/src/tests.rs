@@ -3,6 +3,9 @@ use crate::Tensor;
 #[allow(unused_imports)]
 use axler_uop::DeviceType;
 
+#[cfg(test)]
+use serial_test::serial;
+
 #[test]
 fn test_realize() {
     let buf = &[1., 2., 3., 4.];
@@ -223,6 +226,7 @@ fn test_mean_reduce() {
 }
 
 #[test]
+#[serial]
 fn test_reduce_with_device() {
     // Test reduce operations with device transfers
     let buf = &[1., 2., 3., 4., 5., 6.];
@@ -268,6 +272,7 @@ fn test_sum_2d_cpu() {
 }
 
 #[test]
+#[serial]
 fn test_sum_2d_cuda() {
     // Test sum on 2D tensor on CUDA like in the benchmark
     let size = 128;
@@ -285,6 +290,7 @@ fn test_sum_2d_cuda() {
 }
 
 #[test]
+#[serial]
 fn test_spawn_realize_single() {
     let buf = &[1.0f32, 2.0, 3.0, 4.0];
     let tensor = Tensor::from_slice(buf, DeviceType::CPU);
@@ -302,6 +308,7 @@ fn test_spawn_realize_single() {
 }
 
 #[test]
+#[serial]
 fn test_spawn_realize_multiple_join() {
     let buf1 = &[1.0f32, 2.0, 3.0, 4.0];
     let buf2 = &[5.0f32, 6.0, 7.0, 8.0];
@@ -332,6 +339,7 @@ fn test_spawn_realize_multiple_join() {
 }
 
 #[test]
+#[serial]
 fn test_spawn_realize_complex_graph() {
     // Test async with complex computation graph
     let buf = &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -354,6 +362,7 @@ fn test_spawn_realize_complex_graph() {
 }
 
 #[test]
+#[serial]
 fn test_spawn_realize_with_reduce() {
     let buf = &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let tensor = Tensor::from_slice(buf, DeviceType::CUDA);
@@ -370,6 +379,7 @@ fn test_spawn_realize_with_reduce() {
 }
 
 #[test]
+#[serial]
 fn test_spawn_realize_many_concurrent() {
     let mut handles = Vec::new();
 
@@ -398,7 +408,8 @@ fn test_spawn_realize_many_concurrent() {
 }
 
 #[test]
-fn test_to_device_realizes_parent(){
+#[serial]
+fn test_to_device_realizes_parent() {
     use axler_uop::UOp;
 
     // Test that to_device() realizes unrealized computations first
@@ -414,7 +425,10 @@ fn test_to_device_realizes_parent(){
     match &cpu_to_gpu.uop {
         UOp::Load(parent, device) => {
             assert_eq!(*device, DeviceType::CUDA);
-            assert!(matches!(parent.as_ref(), UOp::Kernel(_, _, _, DeviceType::CPU)));
+            assert!(matches!(
+                parent.as_ref(),
+                UOp::Kernel(_, _, _, DeviceType::CPU)
+            ));
         }
         _ => panic!("Expected Load node"),
     }
@@ -424,4 +438,24 @@ fn test_to_device_realizes_parent(){
 
     let res: Vec<f32> = res.to_vec();
     assert_eq!(res, vec![3.0, 6.0, 9.0, 12.0]);
+}
+
+#[test]
+#[serial]
+fn test_buffer_isolation_sync_async() {
+    let tensor1 = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], DeviceType::CUDA);
+    let tensor2 = Tensor::from_slice(&[5.0, 6.0, 7.0, 8.0], DeviceType::CUDA);
+
+    let handle1 = (&tensor1 + &tensor2)
+        .spawn_realize()
+        .expect("Failed to spawn");
+    let result1 = futures::executor::block_on(handle1).expect("Failed to realize");
+    let output1: Vec<f32> = result1.to_vec();
+    assert_eq!(output1, vec![6.0, 8.0, 10.0, 12.0]);
+
+    let tensor3 = Tensor::from_slice(&[10.0, 20.0, 30.0, 40.0], DeviceType::CUDA);
+    let tensor4 = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], DeviceType::CUDA);
+    let sync_result = (&tensor3 + &tensor4).realize();
+    let sync_output: Vec<f32> = sync_result.to_vec();
+    assert_eq!(sync_output, vec![11.0, 22.0, 33.0, 44.0]);
 }

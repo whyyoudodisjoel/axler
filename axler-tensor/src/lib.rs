@@ -24,26 +24,27 @@ impl Drop for Tensor {
     fn drop(&mut self) {
         // Free any realized buffers when the tensor is dropped
         if let UOp::Kernel(_, buf, _, device) = &self.uop {
-            // Get the appropriate device and deallocate
-            match device {
-                DeviceType::CPU => {
-                    let mut device = axler_cpu::CPU_DEVICE.lock();
-                    unsafe {
-                        device.deallocate(
-                            buf.ptr.f32 as *mut std::ffi::c_void,
-                            buf.size,
-                            buf.dtype,
-                        );
-                    }
-                }
-                DeviceType::CUDA => {
-                    if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
+            if buf.is_last_reference() {
+                match device {
+                    DeviceType::CPU => {
+                        let mut device = axler_cpu::CPU_DEVICE.lock();
                         unsafe {
                             device.deallocate(
-                                buf.ptr.f32 as *mut std::ffi::c_void,
-                                buf.size,
-                                buf.dtype,
+                                buf.ptr().f32 as *mut std::ffi::c_void,
+                                buf.size(),
+                                buf.dtype(),
                             );
+                        }
+                    }
+                    DeviceType::CUDA => {
+                        if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
+                            unsafe {
+                                device.deallocate(
+                                    buf.ptr().f32 as *mut std::ffi::c_void,
+                                    buf.size(),
+                                    buf.dtype(),
+                                );
+                            }
                         }
                     }
                 }
@@ -63,15 +64,15 @@ impl Tensor {
         let buffer_ptr = T::to_buffer_ptr(ptr, len);
 
         let mut res = Self {
-            uop: UOp::Buffer(Buffer {
+            uop: UOp::Buffer(Buffer::new(
                 dtype,
-                ptr: buffer_ptr,
-                device: axler_uop::DeviceType::CPU, // Host data starts on CPU
-                size: len,
-            }),
+                buffer_ptr,
+                axler_uop::DeviceType::CPU, // Host data starts on CPU
+                len,
+            )),
         };
 
-        if !matches!(device, DeviceType::CPU){
+        if !matches!(device, DeviceType::CPU) {
             res = res.to_device(device);
         }
 
