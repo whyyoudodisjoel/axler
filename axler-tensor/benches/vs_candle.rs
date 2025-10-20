@@ -16,7 +16,7 @@ fn benchmark_add(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("axler", sz), &sz, |b, &sz| {
             b.iter(|| {
                 let data = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
-                let t = TinyTensor::from_slice(&data);
+                let t = TinyTensor::from_slice(&data, DeviceType::CPU);
                 let t_reshaped = t.reshape(&[sz, sz]);
                 let result = &t_reshaped + &t_reshaped;
                 let realized = result.realize();
@@ -51,9 +51,9 @@ fn benchmark_sub(c: &mut Criterion) {
                 let data1 = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
                 let data2 = (0..sz * sz).map(|i| (i + 1) as f32).collect::<Vec<_>>();
 
-                let t1 = TinyTensor::from_slice(&data1);
+                let t1 = TinyTensor::from_slice(&data1, DeviceType::CPU);
                 let t1_reshaped = t1.reshape(&[sz, sz]);
-                let t2 = TinyTensor::from_slice(&data2);
+                let t2 = TinyTensor::from_slice(&data2, DeviceType::CPU);
                 let t2_reshaped = t2.reshape(&[sz, sz]);
                 let result = &t1_reshaped - &t2_reshaped;
                 let realized = result.realize();
@@ -92,9 +92,9 @@ fn benchmark_mul(c: &mut Criterion) {
                 let data1 = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
                 let data2 = (0..sz * sz).map(|i| (i + 1) as f32).collect::<Vec<_>>();
 
-                let t1 = TinyTensor::from_slice(&data1);
+                let t1 = TinyTensor::from_slice(&data1, DeviceType::CPU);
                 let t1_reshaped = t1.reshape(&[sz, sz]);
-                let t2 = TinyTensor::from_slice(&data2);
+                let t2 = TinyTensor::from_slice(&data2, DeviceType::CPU);
                 let t2_reshaped = t2.reshape(&[sz, sz]);
                 let result = &t1_reshaped * &t2_reshaped;
                 let realized = result.realize();
@@ -135,9 +135,9 @@ fn benchmark_div(c: &mut Criterion) {
                     .map(|i| (i + 1) as f32 + 0.1)
                     .collect::<Vec<_>>();
 
-                let t1 = TinyTensor::from_slice(&data1);
+                let t1 = TinyTensor::from_slice(&data1, DeviceType::CPU);
                 let t1_reshaped = t1.reshape(&[sz, sz]);
-                let t2 = TinyTensor::from_slice(&data2);
+                let t2 = TinyTensor::from_slice(&data2, DeviceType::CPU);
                 let t2_reshaped = t2.reshape(&[sz, sz]);
                 let result = &t1_reshaped / &t2_reshaped;
                 let realized = result.realize();
@@ -176,7 +176,7 @@ fn benchmark_sum(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("axler", sz), &sz, |b, &sz| {
             b.iter(|| {
                 let data = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
-                let t = TinyTensor::from_slice(&data);
+                let t = TinyTensor::from_slice(&data, DeviceType::CPU);
                 let t_reshaped = t.reshape(&[sz, sz]);
                 let result = t_reshaped.sum(None);
                 let realized = result.realize();
@@ -210,7 +210,7 @@ fn benchmark_max(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("axler", sz), &sz, |b, &sz| {
             b.iter(|| {
                 let data = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
-                let t = TinyTensor::from_slice(&data);
+                let t = TinyTensor::from_slice(&data, DeviceType::CPU);
                 let t_reshaped = t.reshape(&[sz, sz]);
                 let result = t_reshaped.max(None);
                 let realized = result.realize();
@@ -244,7 +244,7 @@ fn benchmark_mean(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("axler", sz), &sz, |b, &sz| {
             b.iter(|| {
                 let data = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
-                let t = TinyTensor::from_slice(&data);
+                let t = TinyTensor::from_slice(&data, DeviceType::CPU);
                 let t_reshaped = t.reshape(&[sz, sz]);
                 let result = t_reshaped.mean(None);
                 let realized = result.realize();
@@ -282,13 +282,13 @@ fn benchmark_fusion(c: &mut Criterion) {
                 let data_c = (0..sz * sz).map(|i| (i + 2) as f32).collect::<Vec<_>>();
                 let data_d = (0..sz * sz).map(|i| (i + 3) as f32).collect::<Vec<_>>();
 
-                let a = TinyTensor::from_slice(&data_a);
+                let a = TinyTensor::from_slice(&data_a, DeviceType::CPU);
                 let a_reshaped = a.reshape(&[sz, sz]);
-                let b_tensor = TinyTensor::from_slice(&data_b);
+                let b_tensor = TinyTensor::from_slice(&data_b, DeviceType::CPU);
                 let b_reshaped = b_tensor.reshape(&[sz, sz]);
-                let c = TinyTensor::from_slice(&data_c);
+                let c = TinyTensor::from_slice(&data_c, DeviceType::CPU);
                 let c_reshaped = c.reshape(&[sz, sz]);
-                let d = TinyTensor::from_slice(&data_d);
+                let d = TinyTensor::from_slice(&data_d, DeviceType::CPU);
                 let d_reshaped = d.reshape(&[sz, sz]);
                 let add_result = &a_reshaped + &b_reshaped;
                 let mul_result = &add_result * &c_reshaped;
@@ -339,9 +339,8 @@ fn benchmark_add_cuda(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("axler", sz), &sz, |b, &sz| {
             b.iter(|| {
                 let data = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
-                let t = TinyTensor::from_slice(&data);
-                let t_reshaped = t.reshape(&[sz, sz]);
-                let t_cuda = t_reshaped.to_device(DeviceType::CUDA);
+                let t = TinyTensor::from_slice(&data, DeviceType::CUDA);
+                let t_cuda = t.reshape(&[sz, sz]);
                 let result = &t_cuda + &t_cuda;
                 let realized = result.realize();
                 black_box(&realized);
@@ -378,13 +377,11 @@ fn benchmark_mul_cuda(c: &mut Criterion) {
                 let data1 = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
                 let data2 = (0..sz * sz).map(|i| (i + 1) as f32).collect::<Vec<_>>();
 
-                let t1 = TinyTensor::from_slice(&data1);
-                let t1_reshaped = t1.reshape(&[sz, sz]);
-                let t1_cuda = t1_reshaped.to_device(DeviceType::CUDA);
+                let t1 = TinyTensor::from_slice(&data1, DeviceType::CUDA);
+                let t1_cuda = t1.reshape(&[sz, sz]);
 
-                let t2 = TinyTensor::from_slice(&data2);
-                let t2_reshaped = t2.reshape(&[sz, sz]);
-                let t2_cuda = t2_reshaped.to_device(DeviceType::CUDA);
+                let t2 = TinyTensor::from_slice(&data2, DeviceType::CUDA);
+                let t2_cuda = t2.reshape(&[sz, sz]);
                 let result = &t1_cuda * &t2_cuda;
                 let realized = result.realize();
                 black_box(&realized);
@@ -422,7 +419,7 @@ fn benchmark_sum_cuda(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("axler", sz), &sz, |b, &sz| {
             b.iter(|| {
                 let data = (0..sz * sz).map(|i| i as f32).collect::<Vec<_>>();
-                let t = TinyTensor::from_slice(&data);
+                let t = TinyTensor::from_slice(&data, DeviceType::CPU);
                 let t_reshaped = t.reshape(&[sz, sz]);
                 let t_cuda = t_reshaped.to_device(DeviceType::CUDA);
                 let result = t_cuda.sum(None);
@@ -462,21 +459,17 @@ fn benchmark_fusion_cuda(c: &mut Criterion) {
                 let data_c = (0..sz * sz).map(|i| (i + 2) as f32).collect::<Vec<_>>();
                 let data_d = (0..sz * sz).map(|i| (i + 3) as f32).collect::<Vec<_>>();
 
-                let a_cpu = TinyTensor::from_slice(&data_a);
-                let a_reshaped = a_cpu.reshape(&[sz, sz]);
-                let a = a_reshaped.to_device(DeviceType::CUDA);
+                let a_cpu = TinyTensor::from_slice(&data_a, DeviceType::CUDA);
+                let a = a_cpu.reshape(&[sz, sz]);
 
-                let b_cpu = TinyTensor::from_slice(&data_b);
-                let b_reshaped = b_cpu.reshape(&[sz, sz]);
-                let b_tensor = b_reshaped.to_device(DeviceType::CUDA);
+                let b_cpu = TinyTensor::from_slice(&data_b, DeviceType::CUDA);
+                let b_tensor = b_cpu.reshape(&[sz, sz]);
 
-                let c_cpu = TinyTensor::from_slice(&data_c);
-                let c_reshaped = c_cpu.reshape(&[sz, sz]);
-                let c = c_reshaped.to_device(DeviceType::CUDA);
+                let c_cpu = TinyTensor::from_slice(&data_c, DeviceType::CUDA);
+                let c = c_cpu.reshape(&[sz, sz]);
 
-                let d_cpu = TinyTensor::from_slice(&data_d);
-                let d_reshaped = d_cpu.reshape(&[sz, sz]);
-                let d = d_reshaped.to_device(DeviceType::CUDA);
+                let d_cpu = TinyTensor::from_slice(&data_d, DeviceType::CUDA);
+                let d = d_cpu.reshape(&[sz, sz]);
                 let add_result = &a + &b_tensor;
                 let mul_result = &add_result * &c;
                 let final_result = &mul_result - &d;

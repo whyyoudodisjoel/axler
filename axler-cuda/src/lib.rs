@@ -388,7 +388,6 @@ impl Device for CudaDevice {
         let source_code = self.renderer.render(&lowered, uop);
         let source_hash = Self::get_kernel_hash(&source_code);
 
-        println!("DEBUG: CUDA Kernel: {source_code}");
         // Cache the UOp -> source mapping
         self.uop_to_source_cache
             .insert(uop_hash, source_hash.clone());

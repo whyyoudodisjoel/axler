@@ -53,7 +53,7 @@ impl Drop for Tensor {
 }
 
 impl Tensor {
-    pub fn from_slice<T>(value: &[T]) -> Self
+    pub fn from_slice<T>(value: &[T], device: DeviceType) -> Self
     where
         T: ToDType,
     {
@@ -62,14 +62,20 @@ impl Tensor {
         let len = value.len();
         let buffer_ptr = T::to_buffer_ptr(ptr, len);
 
-        Self {
+        let mut res = Self {
             uop: UOp::Buffer(Buffer {
                 dtype,
                 ptr: buffer_ptr,
                 device: axler_uop::DeviceType::CPU, // Host data starts on CPU
                 size: len,
             }),
+        };
+
+        if !matches!(device, DeviceType::CPU){
+            res = res.to_device(device);
         }
+
+        res
     }
 
     pub fn shape(&self) -> Vec<usize> {

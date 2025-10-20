@@ -299,7 +299,6 @@ impl Device for CpuDevice {
         if let Some(&(handle, ref shape, dtype, size)) = self.kernel_handles.get(&source_hash) {
             return (handle as KernelHandle, shape.clone(), dtype, size);
         }
-        println!("DEBUG: CPU Kernel: {source_code}");
 
         let kernel_info = KernelInfo {
             source_code,

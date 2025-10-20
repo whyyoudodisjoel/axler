@@ -6,7 +6,7 @@ use axler_uop::DeviceType;
 #[test]
 fn test_realize() {
     let buf = &[1., 2., 3., 4.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     let res = &tensor + &tensor;
 
@@ -24,7 +24,7 @@ fn test_realize() {
 #[test]
 fn test_multi_dim() {
     let buf = &[1., 2., 3., 4.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     let tensor = tensor.reshape(&[2, 2]);
     let res = &tensor + &tensor;
@@ -38,7 +38,7 @@ fn test_multi_dim() {
 #[test]
 fn test_shape_preservation() {
     let buf = &[1., 2., 3., 4., 5., 6.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     let tensor_2x3 = tensor.reshape(&[2, 3]);
     let res1 = &tensor_2x3 + &tensor_2x3;
@@ -55,7 +55,7 @@ fn test_shape_preservation() {
 #[test]
 fn test_sum_reduce() {
     let buf = &[1., 2., 3., 4., 5., 6.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // Test sum of all elements
     let sum_all = tensor.sum(None);
@@ -79,7 +79,7 @@ fn test_sum_reduce() {
 #[test]
 fn test_max_reduce() {
     let buf = &[3., 1., 4., 1., 5., 9.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // Test max of all elements
     let max_all = tensor.max(None);
@@ -98,7 +98,7 @@ fn test_max_reduce() {
 #[test]
 fn test_min_reduce() {
     let buf = &[3., 1., 4., 2., 5., 0.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // Test min of all elements
     let min_all = tensor.min(None);
@@ -111,7 +111,7 @@ fn test_min_reduce() {
 fn test_reduce_fusion() {
     // Test that element-wise operations are fused with reduce operations
     let buf = &[1., 2., 3., 4.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // This should generate a single kernel with (a + a) fused into the sum reduction
     let doubled = &tensor + &tensor;
@@ -127,8 +127,8 @@ fn test_complex_reduce_fusion() {
     let buf_a = &[1., 2., 3., 4., 5., 6.];
     let buf_b = &[2., 3., 4., 5., 6., 7.];
 
-    let a = Tensor::from_slice(&buf_a[..]);
-    let b = Tensor::from_slice(&buf_b[..]);
+    let a = Tensor::from_slice(&buf_a[..], DeviceType::CPU);
+    let b = Tensor::from_slice(&buf_b[..], DeviceType::CPU);
 
     // Test 1: Sum of element-wise multiplication
     let mul = &a * &b;
@@ -157,7 +157,7 @@ fn test_complex_reduce_fusion() {
     );
 
     // Test 4: Chained operations - (a + b) * 2 then sum
-    let two = Tensor::from_slice(&[2.0; 6]);
+    let two = Tensor::from_slice(&[2.0; 6], DeviceType::CPU);
     let added = &a + &b;
     let multiplied = &added * &two;
     let complex = multiplied.sum(None);
@@ -173,7 +173,7 @@ fn test_complex_reduce_fusion() {
 fn test_multi_axis_reduce() {
     // Test reducing different axes with binary ops
     let buf = &[1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // Reshape to 3D: 2x3x2
     let tensor_3d = tensor.reshape(&[2, 3, 2]);
@@ -206,7 +206,7 @@ fn test_multi_axis_reduce() {
 #[test]
 fn test_mean_reduce() {
     let buf = &[1., 2., 3., 4., 5., 6.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // Test mean of all elements
     let mean_all = tensor.mean(None);
@@ -226,7 +226,7 @@ fn test_mean_reduce() {
 fn test_reduce_with_device() {
     // Test reduce operations with device transfers
     let buf = &[1., 2., 3., 4., 5., 6.];
-    let tensor = Tensor::from_slice(&buf[..]);
+    let tensor = Tensor::from_slice(&buf[..], DeviceType::CPU);
 
     // Transfer to CUDA and perform reduce
     let cuda_tensor = tensor.to_device(DeviceType::CUDA);
@@ -256,7 +256,7 @@ fn test_sum_2d_cpu() {
     // Test sum on 2D tensor like in the benchmark
     let size = 128;
     let data: Vec<f32> = (0..size * size).map(|i| i as f32).collect();
-    let tensor = Tensor::from_slice(&data);
+    let tensor = Tensor::from_slice(&data, DeviceType::CPU);
     let tensor_2d = tensor.reshape(&[size, size]);
 
     let sum = tensor_2d.sum(None);
@@ -272,7 +272,7 @@ fn test_sum_2d_cuda() {
     // Test sum on 2D tensor on CUDA like in the benchmark
     let size = 128;
     let data: Vec<f32> = (0..size * size).map(|i| i as f32).collect();
-    let tensor = Tensor::from_slice(&data);
+    let tensor = Tensor::from_slice(&data, DeviceType::CPU);
     let tensor_2d = tensor.reshape(&[size, size]);
     let tensor_cuda = tensor_2d.to_device(DeviceType::CUDA);
 
@@ -287,7 +287,7 @@ fn test_sum_2d_cuda() {
 #[test]
 fn test_spawn_realize_single() {
     let buf = &[1.0f32, 2.0, 3.0, 4.0];
-    let tensor = Tensor::from_slice(buf);
+    let tensor = Tensor::from_slice(buf, DeviceType::CPU);
     let tensor_cuda = tensor.to_device(DeviceType::CUDA);
 
     let result = (&tensor_cuda + &tensor_cuda);
@@ -307,9 +307,9 @@ fn test_spawn_realize_multiple_join() {
     let buf2 = &[5.0f32, 6.0, 7.0, 8.0];
     let buf3 = &[10.0f32, 20.0, 30.0, 40.0];
 
-    let t1 = Tensor::from_slice(buf1).to_device(DeviceType::CUDA);
-    let t2 = Tensor::from_slice(buf2).to_device(DeviceType::CUDA);
-    let t3 = Tensor::from_slice(buf3).to_device(DeviceType::CUDA);
+    let t1 = Tensor::from_slice(buf1, DeviceType::CUDA);
+    let t2 = Tensor::from_slice(buf2, DeviceType::CUDA);
+    let t3 = Tensor::from_slice(buf3, DeviceType::CUDA);
 
     let op1 = &t1 + &t1; // [2, 4, 6, 8]
     let op2 = &t2 * &t2; // [25, 36, 49, 64]
@@ -335,7 +335,7 @@ fn test_spawn_realize_multiple_join() {
 fn test_spawn_realize_complex_graph() {
     // Test async with complex computation graph
     let buf = &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = Tensor::from_slice(buf).to_device(DeviceType::CUDA);
+    let tensor = Tensor::from_slice(buf, DeviceType::CUDA);
 
     // Create complex operations
     let doubled = &tensor + &tensor;
@@ -356,7 +356,7 @@ fn test_spawn_realize_complex_graph() {
 #[test]
 fn test_spawn_realize_with_reduce() {
     let buf = &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = Tensor::from_slice(buf).to_device(DeviceType::CUDA);
+    let tensor = Tensor::from_slice(buf, DeviceType::CUDA);
 
     let tensor_2x3 = tensor.reshape(&[2, 3]);
     let sum = tensor_2x3.sum(None);
@@ -376,7 +376,7 @@ fn test_spawn_realize_many_concurrent() {
     for i in 0..10 {
         let val = (i as f32 + 1.0) * 10.0;
         let buf = vec![val; 100];
-        let tensor = Tensor::from_slice(&buf).to_device(DeviceType::CUDA);
+        let tensor = Tensor::from_slice(&buf, DeviceType::CUDA);
         // to_device() now realizes and copies to GPU, so buf can be dropped
 
         let result = &tensor + &tensor; // Should double each value
@@ -402,8 +402,8 @@ fn test_to_device_realizes_parent(){
     use axler_uop::UOp;
 
     // Test that to_device() realizes unrealized computations first
-    let tensor = Tensor::from_slice(&[1., 2., 3., 4.]);
-    let tensor1 = Tensor::from_slice(&[1., 2., 3., 4.]);
+    let tensor = Tensor::from_slice(&[1., 2., 3., 4.], DeviceType::CPU);
+    let tensor1 = Tensor::from_slice(&[1., 2., 3., 4.], DeviceType::CPU);
 
     let cpu_res = &tensor1 + &tensor; // Unrealized CPU computation
 
@@ -419,18 +419,9 @@ fn test_to_device_realizes_parent(){
         _ => panic!("Expected Load node"),
     }
 
-    let gpu_tensor = Tensor::from_slice(&[1., 2., 3., 4.]).to_device(DeviceType::CUDA);
+    let gpu_tensor = Tensor::from_slice(&[1., 2., 3., 4.], DeviceType::CUDA);
     let res = (&gpu_tensor + &cpu_to_gpu).realize();
 
     let res: Vec<f32> = res.to_vec();
     assert_eq!(res, vec![3.0, 6.0, 9.0, 12.0]);
-}
-
-#[test]
-fn test_kernel(){
-    let t: Vec<f32> = Tensor::from_slice(&[1., 2., 3., 4.]).reshape(&[2, 2]).to_device(DeviceType::CUDA).sum(Some(1)).realize().to_vec();
-
-    // Should preserve the reshape??
-    println!("Res: {t:?}");
-    // let t = Tensor::from_slice(&[1., 2., 3., 4.]).to_device(DeviceType::CUDA);
 }
