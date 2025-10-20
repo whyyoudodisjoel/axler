@@ -24,26 +24,27 @@ impl Drop for Tensor {
     fn drop(&mut self) {
         // Free any realized buffers when the tensor is dropped
         if let UOp::Kernel(_, buf, _, device) = &self.uop {
-            // Get the appropriate device and deallocate
-            match device {
-                DeviceType::CPU => {
-                    let mut device = axler_cpu::CPU_DEVICE.lock();
-                    unsafe {
-                        device.deallocate(
-                            buf.ptr.f32 as *mut std::ffi::c_void,
-                            buf.size,
-                            buf.dtype,
-                        );
-                    }
-                }
-                DeviceType::CUDA => {
-                    if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
+            if buf.is_last_reference() {
+                match device {
+                    DeviceType::CPU => {
+                        let mut device = axler_cpu::CPU_DEVICE.lock();
                         unsafe {
                             device.deallocate(
-                                buf.ptr.f32 as *mut std::ffi::c_void,
-                                buf.size,
-                                buf.dtype,
+                                buf.ptr().f32 as *mut std::ffi::c_void,
+                                buf.size(),
+                                buf.dtype(),
                             );
+                        }
+                    }
+                    DeviceType::CUDA => {
+                        if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
+                            unsafe {
+                                device.deallocate(
+                                    buf.ptr().f32 as *mut std::ffi::c_void,
+                                    buf.size(),
+                                    buf.dtype(),
+                                );
+                            }
                         }
                     }
                 }
@@ -53,7 +54,7 @@ impl Drop for Tensor {
 }
 
 impl Tensor {
-    pub fn from_slice<T>(value: &[T]) -> Self
+    pub fn from_slice<T>(value: &[T], device: DeviceType) -> Self
     where
         T: ToDType,
     {
@@ -62,14 +63,20 @@ impl Tensor {
         let len = value.len();
         let buffer_ptr = T::to_buffer_ptr(ptr, len);
 
-        Self {
-            uop: UOp::Buffer(Buffer {
+        let mut res = Self {
+            uop: UOp::Buffer(Buffer::new(
                 dtype,
-                ptr: buffer_ptr,
-                device: axler_uop::DeviceType::CPU, // Host data starts on CPU
-                size: len,
-            }),
+                buffer_ptr,
+                axler_uop::DeviceType::CPU, // Host data starts on CPU
+                len,
+            )),
+        };
+
+        if !matches!(device, DeviceType::CPU) {
+            res = res.to_device(device);
         }
+
+        res
     }
 
     pub fn shape(&self) -> Vec<usize> {
@@ -171,10 +178,25 @@ impl Tensor {
     }
 
     /// Transfer tensor to a specific device
-    /// This creates a Load operation that will transfer data when realized
+    /// This realizes the tensor first (if needed), then creates a Load operation
+    /// that will copy data to the target device when the Load is realized
     pub fn to_device(&self, device: DeviceType) -> Self {
+        let current_device = self.uop.get_target_device();
+        if current_device == device {
+            return Tensor {
+                uop: self.uop.clone(),
+            };
+        }
+
+        let realized_parent = match &self.uop {
+            UOp::Kernel(_, _, _, _) | UOp::Buffer(_) | UOp::Const(_) => Tensor {
+                uop: self.uop.clone(),
+            },
+            _ => self.realize(),
+        };
+
         Tensor {
-            uop: UOp::Load(Box::new(self.uop.clone()), device),
+            uop: UOp::Load(Box::new(realized_parent.uop.clone()), device),
         }
     }
 }

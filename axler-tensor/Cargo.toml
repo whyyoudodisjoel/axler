@@ -17,6 +17,7 @@ pprof = { version = "0.13", features = ["flamegraph"], optional = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 pprof = { version = "0.13", features = ["flamegraph", "criterion"] }
 candle-core = {git = "https://github.com/huggingface/candle.git", features = ["cuda"]}
+serial_test = "3.2"
 
 [features]
 default = []

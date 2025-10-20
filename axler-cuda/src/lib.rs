@@ -31,16 +31,17 @@ pub struct CudaDevice {
     kernel_cache: FxHashMap<String, (usize, Vec<usize>, axler_uop::DType, usize)>,
     // Cache UOp hash -> source code hash mapping to skip rendering
     uop_to_source_cache: FxHashMap<u64, String>,
-    // Memory pool for reusing allocations (size -> list of free buffers)
-    memory_pool: FxHashMap<(usize, axler_uop::DType), Vec<SendDevicePtr>>,
+    // Separate memory pools to prevent cross-contamination between sync and async operations
+    sync_memory_pool: FxHashMap<(usize, axler_uop::DType), Vec<SendDevicePtr>>,
+    async_memory_pool: FxHashMap<(usize, axler_uop::DType), Vec<SendDevicePtr>>,
     // Async context for stream-based operations
     async_context: Option<Arc<AsyncCudaContext>>,
 }
 
 impl CudaDevice {
-    fn release_buffer(&mut self, ptr: usize, size: usize, dtype: axler_uop::DType) {
+    fn release_buffer_to_sync_pool(&mut self, ptr: usize, size: usize, dtype: axler_uop::DType) {
         let key = (size, dtype);
-        let pool = self.memory_pool.entry(key).or_insert_with(Vec::new);
+        let pool = self.sync_memory_pool.entry(key).or_insert_with(Vec::new);
 
         // Only keep a reasonable number of buffers in the pool to avoid excessive memory use
         const MAX_POOL_SIZE: usize = 10;
@@ -55,20 +56,46 @@ impl CudaDevice {
         }
     }
 
-    /// Clear all cached buffers from the memory pool to free GPU memory
+    fn release_buffer_to_async_pool(&mut self, ptr: usize, size: usize, dtype: axler_uop::DType) {
+        let key = (size, dtype);
+        let pool = self.async_memory_pool.entry(key).or_insert_with(Vec::new);
+
+        // Only keep a reasonable number of buffers in the pool to avoid excessive memory use
+        const MAX_POOL_SIZE: usize = 10;
+        if pool.len() < MAX_POOL_SIZE {
+            pool.push(SendDevicePtr(ptr));
+        } else {
+            // Free the memory if pool is full
+            use crate::ffi::cuMemFree_v2;
+            unsafe {
+                let _ = cuMemFree_v2(ptr);
+            }
+        }
+    }
+
+    /// Clear all cached buffers from both memory pools to free GPU memory
     pub fn clear_memory_pool(&mut self) {
         use crate::ffi::cuMemFree_v2;
 
-        // Free all pooled buffers
-        for (_, pool) in self.memory_pool.iter() {
+        // Free all sync pool buffers
+        for (_, pool) in self.sync_memory_pool.iter() {
             for SendDevicePtr(ptr) in pool {
                 unsafe {
                     let _ = cuMemFree_v2(*ptr);
                 }
             }
         }
+        self.sync_memory_pool.clear();
 
-        self.memory_pool.clear();
+        // Free all async pool buffers
+        for (_, pool) in self.async_memory_pool.iter() {
+            for SendDevicePtr(ptr) in pool {
+                unsafe {
+                    let _ = cuMemFree_v2(*ptr);
+                }
+            }
+        }
+        self.async_memory_pool.clear();
     }
 
     fn calculate_bytes(size: usize, dtype: axler_uop::DType) -> usize {
@@ -98,7 +125,8 @@ impl CudaDevice {
             loaded_kernels: FxHashMap::default(),
             kernel_cache: FxHashMap::default(),
             uop_to_source_cache: FxHashMap::default(),
-            memory_pool: FxHashMap::default(),
+            sync_memory_pool: FxHashMap::default(),
+            async_memory_pool: FxHashMap::default(),
             async_context: None,
         })
     }
@@ -283,12 +311,10 @@ impl Device for CudaDevice {
         self.ensure_context_current()
             .expect("Failed to set CUDA context as current");
 
-        // Try to get a buffer from the pool first
+        // Try to get a buffer from the SYNC pool first
         let key = (size, dtype);
-        if let Some(pool) = self.memory_pool.get_mut(&key) {
+        if let Some(pool) = self.sync_memory_pool.get_mut(&key) {
             if let Some(SendDevicePtr(ptr)) = pool.pop() {
-                // Don't clear the buffer - it will be overwritten by the kernel
-                // This saves significant memset overhead on GPU
                 return ptr as *mut c_void;
             }
         }
@@ -350,8 +376,8 @@ impl Device for CudaDevice {
         self.ensure_context_current()
             .expect("Failed to set CUDA context as current");
 
-        // Return buffer to pool
-        self.release_buffer(ptr as usize, size, dtype);
+        // Return buffer to SYNC pool
+        self.release_buffer_to_sync_pool(ptr as usize, size, dtype);
     }
 
     fn free_kernel(&mut self, kernel: KernelHandle) {
@@ -438,9 +464,26 @@ impl axler_traits::AsyncDevice for CudaDevice {
     }
 
     fn allocate_async(&mut self, size: usize, dtype: axler_uop::DType) -> *mut c_void {
-        // For now, CUDA allocation is fast enough to be synchronous
-        // In the future, could use memory pools or stream-ordered allocations
-        self.allocate(size, dtype)
+        self.ensure_context_current()
+            .expect("Failed to set CUDA context as current");
+
+        let key = (size, dtype);
+        if let Some(pool) = self.async_memory_pool.get_mut(&key) {
+            if let Some(SendDevicePtr(ptr)) = pool.pop() {
+                return ptr as *mut c_void;
+            }
+        }
+
+        let bytes = Self::calculate_bytes(size, dtype);
+        use crate::ffi::cuMemAlloc_v2;
+
+        let mut ptr: usize = 0;
+        unsafe {
+            crate::ffi::check_cuda_error(cuMemAlloc_v2(&mut ptr, bytes))
+                .expect("Failed to allocate device memory");
+        }
+
+        ptr as *mut c_void
     }
 
     fn copy_host_device_async(
@@ -510,8 +553,14 @@ impl axler_traits::AsyncDevice for CudaDevice {
     }
 
     fn deallocate_async(&mut self, ptr: *mut c_void, size: usize, dtype: axler_uop::DType) {
-        // Deallocation can be done synchronously as it's just returning to the pool
-        self.deallocate(ptr, size, dtype);
+        if ptr.is_null() {
+            return;
+        }
+
+        self.ensure_context_current()
+            .expect("Failed to set CUDA context as current");
+
+        self.release_buffer_to_async_pool(ptr as usize, size, dtype);
     }
 }
 

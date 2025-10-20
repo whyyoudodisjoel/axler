@@ -83,12 +83,11 @@ impl Future for TensorHandle {
         if let Some(ref mut kernel_fut) = self.kernel_future {
             match Pin::new(kernel_fut).poll(cx) {
                 Poll::Ready(Ok(())) => {
-                    // Kernel completed, deallocate temporary buffers
                     if let Some(cuda_device_mutex) = get_cuda_device() {
                         let mut cuda_device_opt = cuda_device_mutex.lock().unwrap();
                         if let Some(ref mut device) = *cuda_device_opt {
                             for i in 0..self.temp_buffers.len() {
-                                device.deallocate(
+                                device.deallocate_async(
                                     self.temp_buffers[i],
                                     self.temp_sizes[i],
                                     self.temp_dtypes[i],
@@ -98,9 +97,9 @@ impl Future for TensorHandle {
                     }
 
                     // Construct the output buffer
-                    let buffer = axler_uop::Buffer {
-                        dtype: self.output_dtype,
-                        ptr: unsafe {
+                    let buffer = axler_uop::Buffer::new(
+                        self.output_dtype,
+                        unsafe {
                             match self.output_dtype {
                                 axler_uop::DType::F32 => axler_uop::BufferPtr {
                                     f32: std::slice::from_raw_parts(
@@ -122,9 +121,9 @@ impl Future for TensorHandle {
                                 },
                             }
                         },
-                        device: self.target_device,
-                        size: self.output_size,
-                    };
+                        self.target_device,
+                        self.output_size,
+                    );
 
                     Poll::Ready(Ok(Tensor {
                         uop: UOp::Kernel(
@@ -172,10 +171,10 @@ impl Tensor {
         let buffers = self.uop.extract_buffers();
 
         for buf in &buffers {
-            if buf.device != target_device && buf.device != DeviceType::CPU {
+            if buf.device() != target_device && buf.device() != DeviceType::CPU {
                 return Err(format!(
                     "Cannot execute kernel with buffers on different devices. Found buffer on {:?}, expected {:?}",
-                    buf.device, target_device
+                    buf.device(), target_device
                 ));
             }
         }
@@ -198,24 +197,28 @@ impl Tensor {
                 let mut buffer_ptrs: Vec<*mut c_void> = Vec::new();
 
                 for buf in &buffers {
-                    if buf.device == DeviceType::CUDA {
+                    if buf.device() == DeviceType::CUDA {
                         buffer_ptrs.push(buf.get_buffer_ptr() as *mut c_void);
                     } else {
                         // Allocate device buffer
                         let size = buf.get_buffer_size();
-                        let device_buf = device.allocate_async(size, buf.dtype);
+                        let device_buf = device.allocate_async(size, buf.dtype());
                         let host_ptr = buf.get_buffer_ptr();
 
                         // Launch async H2D copy
-                        let h2d_future =
-                            device.copy_host_device_async(host_ptr, device_buf, size, buf.dtype)?;
+                        let h2d_future = device.copy_host_device_async(
+                            host_ptr,
+                            device_buf,
+                            size,
+                            buf.dtype(),
+                        )?;
 
                         h2d_futures.push(h2d_future);
 
                         // Track for later deallocation
                         temp_buffers.push(device_buf);
                         temp_sizes.push(size);
-                        temp_dtypes.push(buf.dtype);
+                        temp_dtypes.push(buf.dtype());
 
                         buffer_ptrs.push(device_buf);
                     }

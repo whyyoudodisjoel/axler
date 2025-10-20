@@ -18,10 +18,10 @@ impl CpuRenderer {
 
     fn allocate_buffer_idx(&mut self, buffer: Buffer) -> usize {
         let ptr_addr = unsafe {
-            match buffer.dtype {
-                DType::F32 => (*buffer.ptr.f32).as_ptr() as usize,
-                DType::U32 => (*buffer.ptr.u32).as_ptr() as usize,
-                DType::U8 => (*buffer.ptr.u8).as_ptr() as usize,
+            match buffer.dtype() {
+                DType::F32 => (*buffer.ptr().f32).as_ptr() as usize,
+                DType::U32 => (*buffer.ptr().u32).as_ptr() as usize,
+                DType::U8 => (*buffer.ptr().u8).as_ptr() as usize,
             }
         };
 
@@ -213,7 +213,7 @@ impl CpuRenderer {
     fn generate_expression(&mut self, uop: &UOp, indices: &[String], shape: &[usize]) -> String {
         match uop {
             UOp::Buffer(buf) => {
-                let idx = self.allocate_buffer_idx(*buf);
+                let idx = self.allocate_buffer_idx(buf.clone());
                 let index_expr = if shape.len() > 1 {
                     rangeify(indices, shape)
                 } else if indices.is_empty() {
@@ -298,7 +298,7 @@ impl CpuRenderer {
             }
             UOp::Load(parent, _) => self.generate_expression(parent.as_ref(), indices, shape),
             UOp::Kernel(_, buf, _, _) => {
-                let idx = self.allocate_buffer_idx(*buf);
+                let idx = self.allocate_buffer_idx(buf.clone());
                 let index_expr = if shape.len() > 1 {
                     rangeify(indices, shape)
                 } else if indices.is_empty() {
