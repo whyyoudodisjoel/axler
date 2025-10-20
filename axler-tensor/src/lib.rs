@@ -22,29 +22,32 @@ unsafe impl Sync for Tensor {}
 
 impl Drop for Tensor {
     fn drop(&mut self) {
-        // Free any realized buffers when the tensor is dropped
-        if let UOp::Kernel(_, buf, _, device) = &self.uop {
-            if buf.is_last_reference() {
-                match device {
-                    DeviceType::CPU => {
-                        let mut device = axler_cpu::CPU_DEVICE.lock();
+        let (buf, device) = match &self.uop {
+            UOp::Kernel(_, buf, _, device) => (buf, *device),
+            UOp::Buffer(buf) if buf.device() == DeviceType::CUDA => (buf, buf.device()),
+            _ => return,
+        };
+
+        if buf.is_last_reference() {
+            match device {
+                DeviceType::CPU => {
+                    let mut device = axler_cpu::CPU_DEVICE.lock();
+                    unsafe {
+                        device.deallocate(
+                            buf.ptr().f32 as *mut std::ffi::c_void,
+                            buf.size(),
+                            buf.dtype(),
+                        );
+                    }
+                }
+                DeviceType::CUDA => {
+                    if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
                         unsafe {
                             device.deallocate(
                                 buf.ptr().f32 as *mut std::ffi::c_void,
                                 buf.size(),
                                 buf.dtype(),
                             );
-                        }
-                    }
-                    DeviceType::CUDA => {
-                        if let Some(ref mut device) = *axler_cuda::CUDA_DEVICE.lock().unwrap() {
-                            unsafe {
-                                device.deallocate(
-                                    buf.ptr().f32 as *mut std::ffi::c_void,
-                                    buf.size(),
-                                    buf.dtype(),
-                                );
-                            }
                         }
                     }
                 }
@@ -178,25 +181,100 @@ impl Tensor {
     }
 
     /// Transfer tensor to a specific device
-    /// This realizes the tensor first (if needed), then creates a Load operation
-    /// that will copy data to the target device when the Load is realized
     pub fn to_device(&self, device: DeviceType) -> Self {
-        let current_device = self.uop.get_target_device();
-        if current_device == device {
+        use axler_cpu::get_cpu_device;
+        use axler_cuda::get_cuda_device;
+
+        if self.uop.get_target_device() == device {
             return Tensor {
                 uop: self.uop.clone(),
             };
         }
 
-        let realized_parent = match &self.uop {
-            UOp::Kernel(_, _, _, _) | UOp::Buffer(_) | UOp::Const(_) => Tensor {
-                uop: self.uop.clone(),
-            },
-            _ => self.realize(),
+        let (source_buffer, shape, is_raw_buffer) = match &self.uop {
+            UOp::Buffer(buf) => (buf.clone(), vec![], true),
+            UOp::Const(_) => {
+                return Tensor {
+                    uop: self.uop.clone(),
+                }
+            }
+            UOp::Kernel(_, buf, shape, _) => (buf.clone(), shape.clone(), false),
+            _ => {
+                let realized = self.realize();
+                match &realized.uop {
+                    UOp::Kernel(_, buf, shape, _) => (buf.clone(), shape.clone(), false),
+                    _ => panic!("Expected Kernel after realization"),
+                }
+            }
         };
 
-        Tensor {
-            uop: UOp::Load(Box::new(realized_parent.uop.clone()), device),
+        let (dtype, size) = (source_buffer.dtype(), source_buffer.size());
+
+        let make_buffer = |ptr: *mut std::ffi::c_void, device: DeviceType| {
+            axler_uop::Buffer::new(
+                dtype,
+                unsafe {
+                    match dtype {
+                        axler_uop::DType::F32 => axler_uop::BufferPtr {
+                            f32: std::slice::from_raw_parts(ptr as *const f32, size),
+                        },
+                        axler_uop::DType::U32 => axler_uop::BufferPtr {
+                            u32: std::slice::from_raw_parts(ptr as *const u32, size),
+                        },
+                        axler_uop::DType::U8 => axler_uop::BufferPtr {
+                            u8: std::slice::from_raw_parts(ptr as *const u8, size),
+                        },
+                    }
+                },
+                device,
+                size,
+            )
+        };
+
+        let target_buffer = match (source_buffer.device(), device) {
+            (DeviceType::CPU, DeviceType::CUDA) => {
+                let mut cuda_device = get_cuda_device()
+                    .expect("CUDA not initialized")
+                    .lock()
+                    .unwrap();
+                let cuda_device = cuda_device.as_mut().expect("CUDA device not available");
+                let device_buf = cuda_device.allocate(size, dtype);
+                cuda_device.copy_host_device(
+                    source_buffer.get_buffer_ptr(),
+                    device_buf,
+                    size,
+                    dtype,
+                );
+                make_buffer(device_buf, DeviceType::CUDA)
+            }
+            (DeviceType::CUDA, DeviceType::CPU) => {
+                let cuda_device = get_cuda_device()
+                    .expect("CUDA not initialized")
+                    .lock()
+                    .unwrap();
+                let cuda_device = cuda_device.as_ref().expect("CUDA device not available");
+                let mut cpu_device = get_cpu_device().lock();
+                let host_buf = cpu_device.allocate(size, dtype);
+                cuda_device.copy_device_host(source_buffer.get_buffer_ptr(), host_buf, size, dtype);
+                make_buffer(host_buf, DeviceType::CPU)
+            }
+            _ => panic!("Unsupported device transfer"),
+        };
+
+        if is_raw_buffer && device == DeviceType::CUDA {
+            Tensor {
+                uop: UOp::Buffer(target_buffer),
+            }
+        } else {
+            let output_shape = if is_raw_buffer { vec![size] } else { shape };
+            Tensor {
+                uop: UOp::Kernel(
+                    Box::new(self.uop.clone()),
+                    target_buffer,
+                    output_shape,
+                    device,
+                ),
+            }
         }
     }
 }

@@ -123,8 +123,6 @@ impl CudaRenderer {
                     self.generate_expression(inner.as_ref(), indices, shape)
                 }
             },
-            UOp::Load(parent, _) => self.generate_expression(parent.as_ref(), indices, shape),
-
             UOp::Kernel(_, buf, _, _) => {
                 let idx = self.allocate_buffer_idx(buf.clone());
                 let index_expr = if shape.len() > 1 {

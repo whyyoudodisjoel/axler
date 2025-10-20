@@ -110,43 +110,14 @@ impl Tensor {
 
         let output_buffer = device.allocate(output_size, output_dtype);
 
-        let mut buffer_ptrs: Vec<*mut c_void> = if target_device == DeviceType::CUDA {
-            buffers
-                .iter()
-                .map(|buf| {
-                    // Check if buffer is already on CUDA device
-                    if buf.device() == DeviceType::CUDA {
-                        buf.get_buffer_ptr() as *mut c_void
-                    } else {
-                        let size = buf.get_buffer_size();
-                        let device_buf = device.allocate(size, buf.dtype());
-                        let host_ptr = buf.get_buffer_ptr();
-                        device.copy_host_device(host_ptr, device_buf, size, buf.dtype());
-                        device_buf
-                    }
-                })
-                .collect()
-        } else {
-            buffers
-                .iter()
-                .map(|buf| buf.get_buffer_ptr() as *mut c_void)
-                .collect()
-        };
+        let mut buffer_ptrs: Vec<*mut c_void> = buffers
+            .iter()
+            .map(|buf| buf.get_buffer_ptr() as *mut c_void)
+            .collect();
 
         buffer_ptrs.push(output_buffer);
 
         device.execute(kernel_ptr, buffer_ptrs.clone());
-
-        // Free temporary device buffers that were allocated for host->device copies
-        if target_device == DeviceType::CUDA {
-            for (i, buf) in buffers.iter().enumerate() {
-                if buf.device() != DeviceType::CUDA {
-                    // This was a temporary buffer we allocated
-                    let size = buf.get_buffer_size();
-                    device.deallocate(buffer_ptrs[i], size, buf.dtype());
-                }
-            }
-        }
 
         (
             output_buffer,
