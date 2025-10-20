@@ -421,16 +421,13 @@ fn test_to_device_realizes_parent() {
     // to_device() should realize cpu_res on CPU first, then copy to GPU
     let cpu_to_gpu = cpu_res.to_device(DeviceType::CUDA);
 
-    // Verify it's now a Load wrapping a realized Kernel
+    // Verify it's now a Kernel on CUDA device (buffer was transferred)
     match &cpu_to_gpu.uop {
-        UOp::Load(parent, device) => {
+        UOp::Kernel(_, buf, _, device) => {
             assert_eq!(*device, DeviceType::CUDA);
-            assert!(matches!(
-                parent.as_ref(),
-                UOp::Kernel(_, _, _, DeviceType::CPU)
-            ));
+            assert_eq!(buf.device(), DeviceType::CUDA);
         }
-        _ => panic!("Expected Load node"),
+        _ => panic!("Expected Kernel node on CUDA device"),
     }
 
     let gpu_tensor = Tensor::from_slice(&[1., 2., 3., 4.], DeviceType::CUDA);
@@ -458,4 +455,17 @@ fn test_buffer_isolation_sync_async() {
     let sync_result = (&tensor3 + &tensor4).realize();
     let sync_output: Vec<f32> = sync_result.to_vec();
     assert_eq!(sync_output, vec![11.0, 22.0, 33.0, 44.0]);
+}
+
+#[test]
+#[serial]
+#[should_panic(expected = "Cannot execute kernel with buffers on different devices")]
+fn test_fail_on_two_device_realize() {
+    let t = Tensor::from_slice(&[1., 2., 3., 4.], DeviceType::CUDA);
+
+    let t1 = Tensor::from_slice(&[5., 6., 7., 8.], DeviceType::CPU);
+
+    let res = (&t1 + &t).realize();
+
+    println!("res: {:?}", res.to_vec::<f32>());
 }

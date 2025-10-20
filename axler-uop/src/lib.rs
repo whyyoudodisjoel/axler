@@ -188,10 +188,6 @@ pub enum UOp {
 
     ReduceOps(ReduceOps<Box<Self>>),
 
-    // Load operation - transfers data from one device to another
-    // Contains the source UOp and target device
-    Load(Box<Self>, DeviceType),
-
     // Kernel Boundary - stores the AST (for gradients), realized buffer, output shape, and device
     Kernel(Box<Self>, Buffer, Vec<usize>, DeviceType),
 }
@@ -199,7 +195,6 @@ pub enum UOp {
 impl UOp {
     pub fn get_target_device(&self) -> DeviceType {
         match &self {
-            UOp::Load(_, device) => *device,
             UOp::Kernel(_, _, _, device) => *device,
             UOp::Buffer(buf) => buf.device(),
             _ => self.find_device_recursive().unwrap_or(DeviceType::CPU),
@@ -208,7 +203,6 @@ impl UOp {
 
     fn find_device_recursive(&self) -> Option<DeviceType> {
         match self {
-            UOp::Load(_, device) => Some(*device),
             UOp::Kernel(_, _, _, device) => Some(*device),
             UOp::Buffer(buf) => Some(buf.device()),
             UOp::ALUOps(op) => {
@@ -389,7 +383,6 @@ impl UOp {
                     padded_shape
                 }
             },
-            UOp::Load(parent, _) => parent.as_ref().shape(),
             UOp::Kernel(_, _, shape, _) => shape.clone(),
             UOp::ReduceOps(op) => match op {
                 ReduceOps::Sum { parent, axes }
@@ -439,7 +432,6 @@ impl UOp {
                 }
                 MovementOps::Pad { parent, .. } => parent.as_ref().dtype(),
             },
-            UOp::Load(parent, _) => parent.as_ref().dtype(),
             UOp::Kernel(_, buf, _, _) => buf.dtype(),
             UOp::ReduceOps(op) => match op {
                 ReduceOps::Sum { parent, .. }
@@ -529,10 +521,6 @@ impl UOp {
                     parent.as_ref().extract_buffers_recursive(buffers, visited);
                 }
             },
-            UOp::Load(parent, _) => {
-                // Load transfers data between devices
-                parent.as_ref().extract_buffers_recursive(buffers, visited);
-            }
             UOp::Kernel(_, buf, _, _) => {
                 buffers.push(buf.clone());
                 // Don't traverse the AST part - it's already realized
@@ -590,9 +578,6 @@ impl UOp {
                     parent.as_ref().dfs_postorder(visited, stack);
                 }
             },
-            UOp::Load(parent, _) => {
-                parent.as_ref().dfs_postorder(visited, stack);
-            }
             UOp::Kernel(_, _, _, _) => {
                 // Kernel boundary - don't traverse the AST, it's already realized
             }
@@ -619,10 +604,6 @@ impl UOp {
                             DType::U8 => val.value.u8.hash(hasher),
                         }
                     }
-                }
-                UOp::Load(shape, device) => {
-                    hash_uop_recursive(shape, hasher);
-                    device.hash(hasher);
                 }
                 UOp::Buffer(buf) => {
                     buf.dtype().hash(hasher);
