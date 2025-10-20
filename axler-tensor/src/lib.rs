@@ -181,7 +181,6 @@ impl Tensor {
     /// This realizes the tensor first (if needed), then creates a Load operation
     /// that will copy data to the target device when the Load is realized
     pub fn to_device(&self, device: DeviceType) -> Self {
-        // If already on target device, return as-is
         let current_device = self.uop.get_target_device();
         if current_device == device {
             return Tensor {
@@ -189,21 +188,17 @@ impl Tensor {
             };
         }
 
-        // Realize the parent computation first if it's not already realized
         let realized_parent = match &self.uop {
             UOp::Kernel(_, _, _, _) | UOp::Buffer(_) | UOp::Const(_) => {
-                // Already realized, use as-is
                 Tensor {
                     uop: self.uop.clone(),
                 }
             }
             _ => {
-                // Unrealized - realize on current device first
                 self.realize()
             }
         };
 
-        // Now create Load with the realized parent
         Tensor {
             uop: UOp::Load(Box::new(realized_parent.uop.clone()), device),
         }

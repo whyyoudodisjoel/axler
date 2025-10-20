@@ -43,9 +43,6 @@ impl CudaDevice {
         let key = (size, dtype);
         let pool = self.sync_memory_pool.entry(key).or_insert_with(Vec::new);
 
-        // With reference-counted buffers, we only deallocate when the last reference is dropped
-        // No need for duplicate detection anymore
-
         // Only keep a reasonable number of buffers in the pool to avoid excessive memory use
         const MAX_POOL_SIZE: usize = 10;
         if pool.len() < MAX_POOL_SIZE {
@@ -62,9 +59,6 @@ impl CudaDevice {
     fn release_buffer_to_async_pool(&mut self, ptr: usize, size: usize, dtype: axler_uop::DType) {
         let key = (size, dtype);
         let pool = self.async_memory_pool.entry(key).or_insert_with(Vec::new);
-
-        // With reference-counted buffers, we only deallocate when the last reference is dropped
-        // No need for duplicate detection anymore
 
         // Only keep a reasonable number of buffers in the pool to avoid excessive memory use
         const MAX_POOL_SIZE: usize = 10;
@@ -382,10 +376,6 @@ impl Device for CudaDevice {
         self.ensure_context_current()
             .expect("Failed to set CUDA context as current");
 
-        // No synchronization needed here because:
-        // 1. Synchronous execute() already synchronizes at line 307
-        // 2. All sync operations are complete before deallocate() is called
-        // 3. Sync and async pools are separate, no cross-contamination
 
         // Return buffer to SYNC pool
         self.release_buffer_to_sync_pool(ptr as usize, size, dtype);
@@ -478,7 +468,6 @@ impl axler_traits::AsyncDevice for CudaDevice {
         self.ensure_context_current()
             .expect("Failed to set CUDA context as current");
 
-        // Try to get a buffer from the ASYNC pool first
         let key = (size, dtype);
         if let Some(pool) = self.async_memory_pool.get_mut(&key) {
             if let Some(SendDevicePtr(ptr)) = pool.pop() {
@@ -486,7 +475,6 @@ impl axler_traits::AsyncDevice for CudaDevice {
             }
         }
 
-        // No buffer available in async pool, allocate new one
         let bytes = Self::calculate_bytes(size, dtype);
         use crate::ffi::cuMemAlloc_v2;
 
@@ -573,7 +561,6 @@ impl axler_traits::AsyncDevice for CudaDevice {
         self.ensure_context_current()
             .expect("Failed to set CUDA context as current");
 
-        // Return buffer to ASYNC pool (no synchronization needed - async operations manage their own stream synchronization)
         self.release_buffer_to_async_pool(ptr as usize, size, dtype);
     }
 }
