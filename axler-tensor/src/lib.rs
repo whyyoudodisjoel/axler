@@ -189,14 +189,10 @@ impl Tensor {
         }
 
         let realized_parent = match &self.uop {
-            UOp::Kernel(_, _, _, _) | UOp::Buffer(_) | UOp::Const(_) => {
-                Tensor {
-                    uop: self.uop.clone(),
-                }
-            }
-            _ => {
-                self.realize()
-            }
+            UOp::Kernel(_, _, _, _) | UOp::Buffer(_) | UOp::Const(_) => Tensor {
+                uop: self.uop.clone(),
+            },
+            _ => self.realize(),
         };
 
         Tensor {

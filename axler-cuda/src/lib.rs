@@ -376,7 +376,6 @@ impl Device for CudaDevice {
         self.ensure_context_current()
             .expect("Failed to set CUDA context as current");
 
-
         // Return buffer to SYNC pool
         self.release_buffer_to_sync_pool(ptr as usize, size, dtype);
     }
